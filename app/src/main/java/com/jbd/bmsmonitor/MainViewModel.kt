@@ -7,6 +7,7 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import com.jbd.bmsmonitor.ble.JbdBleRepository
 import com.jbd.bmsmonitor.model.DiscoveredBms
+import com.jbd.bmsmonitor.model.ServerUploadConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -18,6 +19,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _backgroundDisconnectSeconds = MutableStateFlow(loadBackgroundTimeoutSeconds())
     val backgroundDisconnectSeconds = _backgroundDisconnectSeconds.asStateFlow()
+
+    private val _serverUploadConfig = MutableStateFlow(
+        ServerUploadConfig(
+            enabled = preferences.getBoolean(KEY_SERVER_UPLOAD_ENABLED, false),
+            serverUrl = preferences.getString(KEY_SERVER_URL, "").orEmpty(),
+            apiKey = preferences.getString(KEY_SERVER_API_KEY, "").orEmpty(),
+        ),
+    )
+    val serverUploadConfig = _serverUploadConfig.asStateFlow()
 
     val discovered = repository.discovered
     val devices = repository.devices
@@ -37,6 +47,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         preferences.edit()
             .putInt(KEY_BACKGROUND_TIMEOUT_SECONDS, seconds)
             .remove(LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES)
+            .apply()
+    }
+
+    fun setServerUploadEnabled(enabled: Boolean) {
+        _serverUploadConfig.value = _serverUploadConfig.value.copy(enabled = enabled)
+        preferences.edit().putBoolean(KEY_SERVER_UPLOAD_ENABLED, enabled).apply()
+    }
+
+    fun saveServerUploadConfiguration(serverUrl: String, apiKey: String) {
+        val normalizedUrl = serverUrl.trim()
+        val normalizedApiKey = apiKey.trim()
+        _serverUploadConfig.value = _serverUploadConfig.value.copy(
+            serverUrl = normalizedUrl,
+            apiKey = normalizedApiKey,
+        )
+        preferences.edit()
+            .putString(KEY_SERVER_URL, normalizedUrl)
+            .putString(KEY_SERVER_API_KEY, normalizedApiKey)
             .apply()
     }
 
@@ -94,5 +122,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val APP_PREFERENCES = "app_preferences"
         private const val KEY_BACKGROUND_TIMEOUT_SECONDS = "background_disconnect_seconds"
         private const val LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES = "background_disconnect_minutes"
+        private const val KEY_SERVER_UPLOAD_ENABLED = "server_upload_enabled"
+        private const val KEY_SERVER_URL = "server_upload_url"
+        private const val KEY_SERVER_API_KEY = "server_upload_api_key"
     }
 }

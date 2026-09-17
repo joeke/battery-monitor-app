@@ -6,6 +6,8 @@
         android:name="android.hardware.bluetooth_le"
         android:required="true" />
 
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-permission
         android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
@@ -22,10 +24,11 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
         android:theme="@style/Theme.JbdMonitor">
         <activity
             android:name=".MainActivity"

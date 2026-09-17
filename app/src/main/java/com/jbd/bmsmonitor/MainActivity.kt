@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -39,8 +40,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -60,6 +63,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,6 +73,8 @@ import com.jbd.bmsmonitor.model.BmsSettings
 import com.jbd.bmsmonitor.model.BmsTelemetry
 import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
+import com.jbd.bmsmonitor.model.ServerUploadConfig
+import java.net.URI
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -114,6 +121,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val devices by viewModel.devices.collectAsStateWithLifecycle()
     val scanning by viewModel.scanning.collectAsStateWithLifecycle()
     val backgroundDisconnectSeconds by viewModel.backgroundDisconnectSeconds.collectAsStateWithLifecycle()
+    val serverUploadConfig by viewModel.serverUploadConfig.collectAsStateWithLifecycle()
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     var showAppSettings by remember { mutableStateOf(false) }
     val selected = selectedAddress?.let(devices::get)
@@ -143,6 +151,9 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
         showAppSettings -> AppSettingsScreen(
             backgroundDisconnectSeconds = backgroundDisconnectSeconds,
             onBackgroundDisconnectSecondsChange = viewModel::setBackgroundDisconnectSeconds,
+            serverUploadConfig = serverUploadConfig,
+            onServerUploadEnabledChange = viewModel::setServerUploadEnabled,
+            onSaveServerUploadConfiguration = viewModel::saveServerUploadConfiguration,
             onBack = { showAppSettings = false },
         )
         selected != null -> DeviceDetailScreen(
@@ -170,6 +181,9 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
 private fun AppSettingsScreen(
     backgroundDisconnectSeconds: Int,
     onBackgroundDisconnectSecondsChange: (Int) -> Unit,
+    serverUploadConfig: ServerUploadConfig,
+    onServerUploadEnabledChange: (Boolean) -> Unit,
+    onSaveServerUploadConfiguration: (String, String) -> Unit,
     onBack: () -> Unit,
 ) {
     Scaffold(
@@ -191,6 +205,14 @@ private fun AppSettingsScreen(
                 BackgroundDisconnectCard(
                     seconds = backgroundDisconnectSeconds,
                     onSecondsChange = onBackgroundDisconnectSecondsChange,
+                )
+            }
+            item { SectionTitle("Server upload") }
+            item {
+                ServerUploadCard(
+                    config = serverUploadConfig,
+                    onEnabledChange = onServerUploadEnabledChange,
+                    onSave = onSaveServerUploadConfiguration,
                 )
             }
         }
@@ -643,6 +665,76 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
+private fun ServerUploadCard(
+    config: ServerUploadConfig,
+    onEnabledChange: (Boolean) -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var serverUrl by remember(config.serverUrl) { mutableStateOf(config.serverUrl) }
+    var apiKey by remember(config.apiKey) { mutableStateOf(config.apiKey) }
+    val hasValidUrl = isValidHttpsUrl(serverUrl)
+
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Send data periodically", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Upload battery readings to joeke.dev",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = config.enabled, onCheckedChange = onEnabledChange)
+            }
+
+            if (config.enabled) {
+                OutlinedTextField(
+                    value = serverUrl,
+                    onValueChange = { serverUrl = it },
+                    label = { Text("Server URL") },
+                    placeholder = { Text("https://joeke.dev/api/…") },
+                    supportingText = {
+                        Text(if (serverUrl.isBlank() || hasValidUrl) "HTTPS endpoint" else "Enter a valid HTTPS URL")
+                    },
+                    isError = serverUrl.isNotBlank() && !hasValidUrl,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text("API key") },
+                    supportingText = { Text("Sent using the X-Api-Key header") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = { onSave(serverUrl, apiKey) },
+                    enabled = hasValidUrl && apiKey.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Save server configuration")
+                }
+                Text(
+                    "Configuration only for now; no data is sent until the endpoint and payload are implemented.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun BackgroundDisconnectCard(seconds: Int, onSecondsChange: (Int) -> Unit) {
     var showDialog by remember { mutableStateOf(false) }
 
@@ -779,3 +871,8 @@ private fun timeoutLabel(seconds: Int): String = when (seconds) {
     1_800 -> "30 minutes"
     else -> "$seconds seconds"
 }
+
+private fun isValidHttpsUrl(value: String): Boolean = runCatching {
+    val uri = URI(value.trim())
+    uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
+}.getOrDefault(false)
