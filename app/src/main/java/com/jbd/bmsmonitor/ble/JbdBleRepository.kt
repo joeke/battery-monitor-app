@@ -27,6 +27,7 @@ import com.jbd.bmsmonitor.protocol.JbdFrame
 import com.jbd.bmsmonitor.protocol.JbdFrameAssembler
 import com.jbd.bmsmonitor.protocol.JbdParser
 import com.jbd.bmsmonitor.protocol.JbdProtocol
+import com.jbd.bmsmonitor.storage.SavedBmsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,13 +36,17 @@ class JbdBleRepository(private val context: Context) {
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter? get() = bluetoothManager?.adapter
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val savedBmsStore = SavedBmsStore(context)
     private val found = linkedMapOf<String, DiscoveredBms>()
     private val connections = mutableMapOf<String, BmsConnection>()
+    private var persistenceScheduled = false
 
     private val _discovered = MutableStateFlow<List<DiscoveredBms>>(emptyList())
     val discovered: StateFlow<List<DiscoveredBms>> = _discovered.asStateFlow()
 
-    private val _devices = MutableStateFlow<Map<String, BmsDeviceState>>(emptyMap())
+    private val _devices = MutableStateFlow(
+        savedBmsStore.load().associateBy { it.address },
+    )
     val devices: StateFlow<Map<String, BmsDeviceState>> = _devices.asStateFlow()
 
     private val _scanning = MutableStateFlow(false)
@@ -100,10 +105,15 @@ class JbdBleRepository(private val context: Context) {
         if (!hasConnectPermission()) return
         stopScan()
         connections.remove(device.address)?.close()
-        val initial = BmsDeviceState(
+        val initial = (_devices.value[device.address] ?: BmsDeviceState(
             address = device.address,
             name = device.name,
             rssi = device.rssi,
+        )).copy(
+            name = device.name,
+            rssi = device.rssi,
+            connectionStatus = ConnectionStatus.CONNECTING,
+            error = null,
         )
         _devices.value = _devices.value + (device.address to initial)
         val connection = BmsConnection(initial)
@@ -134,14 +144,26 @@ class JbdBleRepository(private val context: Context) {
         stopScan()
         connections.values.toList().forEach { it.close() }
         connections.clear()
+        mainHandler.removeCallbacks(persistDevicesRunnable)
+        persistenceScheduled = false
+        savedBmsStore.save(_devices.value.values)
     }
 
+    @Synchronized
     private fun updateDevice(address: String, transform: (BmsDeviceState) -> BmsDeviceState) {
         val current = _devices.value[address] ?: return
         _devices.value = _devices.value + (address to transform(current))
+        if (!persistenceScheduled) {
+            persistenceScheduled = true
+            mainHandler.postDelayed(persistDevicesRunnable, PERSIST_INTERVAL_MS)
+        }
     }
 
     private val stopScanRunnable = Runnable { stopScan() }
+    private val persistDevicesRunnable = Runnable {
+        savedBmsStore.save(_devices.value.values)
+        persistenceScheduled = false
+    }
 
     private fun hasScanPermission(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
         context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
@@ -212,7 +234,12 @@ class JbdBleRepository(private val context: Context) {
                 fail("Could not enable JBD notifications (status $status)")
                 return
             }
-            updateDevice(address) { it.copy(connectionStatus = ConnectionStatus.CONNECTED) }
+            updateDevice(address) {
+                it.copy(
+                    connectionStatus = ConnectionStatus.CONNECTED,
+                    lastConnectedAtMillis = System.currentTimeMillis(),
+                )
+            }
             phase = Phase.INITIAL_BASIC
             sendRead(JbdProtocol.BASIC_INFO)
         }
@@ -287,7 +314,9 @@ class JbdBleRepository(private val context: Context) {
                     readNextSetting()
                 }
                 Phase.EXIT_FACTORY -> {
-                    updateDevice(address) { it.copy(settings = it.settings.copy(loaded = true)) }
+                    updateDevice(address) {
+                        it.copy(settings = it.settings.copy(loaded = true, unavailableReason = null))
+                    }
                     scheduleNextPoll()
                 }
                 Phase.STARTING -> Unit
@@ -424,5 +453,6 @@ class JbdBleRepository(private val context: Context) {
         private const val SCAN_DURATION_MS = 12_000L
         private const val POLL_INTERVAL_MS = 2_000L
         private const val REQUEST_TIMEOUT_MS = 2_500L
+        private const val PERSIST_INTERVAL_MS = 5_000L
     }
 }

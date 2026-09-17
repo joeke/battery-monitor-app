@@ -1,10 +1,12 @@
-# JBD Monitor
+# Battery Monitor
 
 A small, native Android app for monitoring multiple JBD / Jiabaida / Xiaoxiang / Overkill Solar-compatible battery-management systems over Bluetooth Low Energy.
 
 ## First-version features
 
 - Finds nearby JBD BLE modules and supports simultaneous connections to multiple BMS devices.
+- Remembers successfully connected devices and their last telemetry/settings snapshot across app restarts.
+- Shows last-connected and last-updated timestamps and allows direct reconnect without scanning first.
 - Shows state of charge, pack voltage, signed current, calculated power, remaining/full capacity, cycle count, and charge/discharge MOS state.
 - Shows every cell voltage, lowest/highest/average cell, balancing state, and pack cell delta.
 - Shows all reported NTC temperature sensors.
@@ -28,6 +30,7 @@ On Android 12+, grant the Nearby devices permission. On Android 8–11, Android 
 - Most JBD modules allow only one central connection. Fully close other BMS apps before connecting.
 - Some clones do not expose the standard `FF00/FF01/FF02` service or password-protect factory mode. Live telemetry will still work when configuration access is unavailable.
 - Polling and connections run while the app process is active. A persistent foreground monitoring service is intentionally outside this first version.
+- Closing the app releases all GATT connections; saved devices and snapshots remain available offline.
 
 ## Protocol references
 

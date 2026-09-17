@@ -64,5 +64,6 @@ data class BmsDeviceState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.CONNECTING,
     val telemetry: BmsTelemetry = BmsTelemetry(),
     val settings: BmsSettings = BmsSettings(),
+    val lastConnectedAtMillis: Long = 0,
     val error: String? = null,
 )

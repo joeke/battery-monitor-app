@@ -1,7 +1,6 @@
 package com.jbd.bmsmonitor
 
 import android.Manifest
-import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -35,7 +34,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -54,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -102,7 +101,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     when {
         !viewModel.bluetoothAvailable -> BlockingMessage(
             title = "Bluetooth LE is not available",
-            body = "JBD Monitor needs a phone or tablet with Bluetooth Low Energy support.",
+            body = "Battery Monitor needs a phone or tablet with Bluetooth Low Energy support.",
         )
         !permissionsGranted -> BlockingMessage(
             title = "Nearby devices permission",
@@ -132,6 +131,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
             onConnect = viewModel::connect,
             onSelect = { selectedAddress = it },
             onDisconnect = viewModel::disconnect,
+            onReconnect = viewModel::reconnect,
         )
     }
 }
@@ -146,15 +146,19 @@ private fun DeviceListScreen(
     onConnect: (DiscoveredBms) -> Unit,
     onSelect: (String) -> Unit,
     onDisconnect: (String) -> Unit,
+    onReconnect: (String) -> Unit,
 ) {
-    val activeAddresses = devices.filter { it.connectionStatus != ConnectionStatus.DISCONNECTED }
-        .mapTo(mutableSetOf()) { it.address }
+    val knownAddresses = devices.mapTo(mutableSetOf()) { it.address }
+    val orderedDevices = devices.sortedWith(
+        compareByDescending<BmsDeviceState> { it.connectionStatus == ConnectionStatus.CONNECTED }
+            .thenByDescending { it.lastConnectedAtMillis },
+    )
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text("JBD Monitor", fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.app_name), fontWeight = FontWeight.Bold)
                         Text("Read-only battery telemetry", style = MaterialTheme.typography.labelMedium)
                     }
                 },
@@ -172,8 +176,8 @@ private fun DeviceListScreen(
         ) {
             if (devices.isNotEmpty()) {
                 item { SectionTitle("My batteries") }
-                items(devices, key = { it.address }) { device ->
-                    ConnectedDeviceCard(device, onSelect, onDisconnect)
+                items(orderedDevices, key = { it.address }) { device ->
+                    ConnectedDeviceCard(device, onSelect, onDisconnect, onReconnect)
                 }
             }
             item {
@@ -195,7 +199,7 @@ private fun DeviceListScreen(
                     )
                 }
             }
-            items(discovered.filterNot { it.address in activeAddresses }, key = { it.address }) { device ->
+            items(discovered.filterNot { it.address in knownAddresses }, key = { it.address }) { device ->
                 DiscoveredDeviceCard(device, onConnect)
             }
         }
@@ -207,6 +211,7 @@ private fun ConnectedDeviceCard(
     device: BmsDeviceState,
     onSelect: (String) -> Unit,
     onDisconnect: (String) -> Unit,
+    onReconnect: (String) -> Unit,
 ) {
     Card(
         onClick = { onSelect(device.address) },
@@ -221,9 +226,12 @@ private fun ConnectedDeviceCard(
                     Text(device.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(statusLabel(device.connectionStatus), style = MaterialTheme.typography.bodySmall)
                 }
-                Text("${device.rssi} dBm", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    if (device.connectionStatus == ConnectionStatus.DISCONNECTED) "Saved" else "${device.rssi} dBm",
+                    style = MaterialTheme.typography.labelMedium,
+                )
             }
-            if (device.connectionStatus == ConnectionStatus.CONNECTED && device.telemetry.updatedAtMillis > 0) {
+            if (device.telemetry.updatedAtMillis > 0) {
                 LinearProgressIndicator(
                     progress = { device.telemetry.stateOfChargePercent.coerceIn(0, 100) / 100f },
                     modifier = Modifier.fillMaxWidth().height(8.dp),
@@ -233,11 +241,30 @@ private fun ConnectedDeviceCard(
                     Metric("Voltage", format(device.telemetry.packVoltageV, "V"))
                     Metric("Power", format(device.telemetry.powerW, "W"))
                 }
+                if (device.connectionStatus == ConnectionStatus.DISCONNECTED) {
+                    Text(
+                        "Last saved values",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (device.lastConnectedAtMillis > 0 || device.telemetry.updatedAtMillis > 0) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (device.lastConnectedAtMillis > 0) {
+                        TimestampText("Last connected", device.lastConnectedAtMillis)
+                    }
+                    if (device.telemetry.updatedAtMillis > 0) {
+                        TimestampText("Last updated", device.telemetry.updatedAtMillis)
+                    }
+                }
             }
             device.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 if (device.connectionStatus != ConnectionStatus.DISCONNECTED) {
                     TextButton(onClick = { onDisconnect(device.address) }) { Text("Disconnect") }
+                } else {
+                    TextButton(onClick = { onReconnect(device.address) }) { Text("Reconnect") }
                 }
                 TextButton(onClick = { onSelect(device.address) }) { Text("Details") }
             }
@@ -294,7 +321,11 @@ private fun DeviceDetailScreen(
             when (tab) {
                 0 -> OverviewTab(device)
                 1 -> CellsTab(device.telemetry)
-                else -> SettingsTab(device.settings, device.telemetry.cellCount)
+                else -> SettingsTab(
+                    settings = device.settings,
+                    liveCellCount = device.telemetry.cellCount,
+                    connected = device.connectionStatus == ConnectionStatus.CONNECTED,
+                )
             }
         }
     }
@@ -308,6 +339,20 @@ private fun OverviewTab(device: BmsDeviceState) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (device.connectionStatus == ConnectionStatus.DISCONNECTED && t.updatedAtMillis > 0) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Text(
+                        "Offline · showing the last saved snapshot from ${formatTimestamp(t.updatedAtMillis)}",
+                        modifier = Modifier.padding(14.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -356,14 +401,11 @@ private fun OverviewTab(device: BmsDeviceState) {
         items(t.temperaturesC.withIndex().toList()) { (index, value) ->
             ValueRow("Sensor ${index + 1}", format(value, "°C"))
         }
+        if (device.lastConnectedAtMillis > 0) {
+            item { ValueRow("Last connected", formatTimestamp(device.lastConnectedAtMillis)) }
+        }
         if (t.updatedAtMillis > 0) {
-            item {
-                Text(
-                    "Updated ${DateFormat.getTimeInstance(DateFormat.MEDIUM).format(Date(t.updatedAtMillis))}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            item { ValueRow("Last updated", formatTimestamp(t.updatedAtMillis)) }
         }
     }
 }
@@ -414,7 +456,7 @@ private fun CellsTab(telemetry: BmsTelemetry) {
 }
 
 @Composable
-private fun SettingsTab(settings: BmsSettings, liveCellCount: Int) {
+private fun SettingsTab(settings: BmsSettings, liveCellCount: Int, connected: Boolean) {
     val values = listOf(
         "Hardware version" to settings.hardwareVersion,
         "Configured cells" to (settings.configuredCellCount ?: liveCellCount.takeIf { it > 0 })?.toString(),
@@ -448,13 +490,20 @@ private fun SettingsTab(settings: BmsSettings, liveCellCount: Int) {
         settings.unavailableReason?.let { reason ->
             item { Text(reason, color = MaterialTheme.colorScheme.error) }
         }
-        if (!settings.loaded && settings.unavailableReason == null) {
+        if (!settings.loaded && settings.unavailableReason == null && connected) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("Reading configuration…")
                 }
+            }
+        } else if (!settings.loaded && settings.unavailableReason == null) {
+            item {
+                Text(
+                    "No saved configuration snapshot. Reconnect to read it.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         items(values) { (label, value) -> ValueRow(label, value ?: "—") }
@@ -499,6 +548,15 @@ private fun Metric(label: String, value: String) {
         Text(label, style = MaterialTheme.typography.labelSmall)
         Text(value, fontWeight = FontWeight.SemiBold)
     }
+}
+
+@Composable
+private fun TimestampText(label: String, timestamp: Long) {
+    Text(
+        "$label: ${formatTimestamp(timestamp)}",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -580,3 +638,6 @@ private fun format(value: Double, unit: String, decimals: Int = 2): String =
 
 private fun signedFormat(value: Double, unit: String): String =
     String.format(Locale.getDefault(), "%+.2f %s", if (abs(value) < 0.005) 0.0 else value, unit)
+
+private fun formatTimestamp(timestamp: Long): String =
+    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(timestamp))
