@@ -7,9 +7,11 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,10 +30,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -52,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -68,9 +74,21 @@ import java.util.Locale
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
+    private val mainViewModel: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { JbdTheme { JbdApp() } }
+        setContent { JbdTheme { JbdApp(mainViewModel) } }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        mainViewModel.onAppForegrounded()
+    }
+
+    override fun onStop() {
+        mainViewModel.onAppBackgrounded()
+        super.onStop()
     }
 }
 
@@ -95,8 +113,13 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val discovered by viewModel.discovered.collectAsStateWithLifecycle()
     val devices by viewModel.devices.collectAsStateWithLifecycle()
     val scanning by viewModel.scanning.collectAsStateWithLifecycle()
+    val backgroundDisconnectSeconds by viewModel.backgroundDisconnectSeconds.collectAsStateWithLifecycle()
     var selectedAddress by remember { mutableStateOf<String?>(null) }
+    var showAppSettings by remember { mutableStateOf(false) }
     val selected = selectedAddress?.let(devices::get)
+
+    BackHandler(enabled = showAppSettings) { showAppSettings = false }
+    BackHandler(enabled = selected != null && !showAppSettings) { selectedAddress = null }
 
     when {
         !viewModel.bluetoothAvailable -> BlockingMessage(
@@ -117,6 +140,11 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
                 enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             },
         )
+        showAppSettings -> AppSettingsScreen(
+            backgroundDisconnectSeconds = backgroundDisconnectSeconds,
+            onBackgroundDisconnectSecondsChange = viewModel::setBackgroundDisconnectSeconds,
+            onBack = { showAppSettings = false },
+        )
         selected != null -> DeviceDetailScreen(
             device = selected,
             onBack = { selectedAddress = null },
@@ -132,7 +160,40 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
             onSelect = { selectedAddress = it },
             onDisconnect = viewModel::disconnect,
             onReconnect = viewModel::reconnect,
+            onOpenSettings = { showAppSettings = true },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppSettingsScreen(
+    backgroundDisconnectSeconds: Int,
+    onBackgroundDisconnectSecondsChange: (Int) -> Unit,
+    onBack: () -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = { TextButton(onClick = onBack) { Text("‹ Back") } },
+                title = { Text("Settings", fontWeight = FontWeight.SemiBold) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item { SectionTitle("Connections") }
+            item {
+                BackgroundDisconnectCard(
+                    seconds = backgroundDisconnectSeconds,
+                    onSecondsChange = onBackgroundDisconnectSecondsChange,
+                )
+            }
+        }
     }
 }
 
@@ -147,6 +208,7 @@ private fun DeviceListScreen(
     onSelect: (String) -> Unit,
     onDisconnect: (String) -> Unit,
     onReconnect: (String) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val knownAddresses = devices.mapTo(mutableSetOf()) { it.address }
     val orderedDevices = devices.sortedWith(
@@ -163,6 +225,12 @@ private fun DeviceListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_settings),
+                            contentDescription = "App settings",
+                        )
+                    }
                     TextButton(onClick = onScan) { Text(if (scanning) "Stop" else "Scan") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -575,6 +643,65 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
+private fun BackgroundDisconnectCard(seconds: Int, onSecondsChange: (Int) -> Unit) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Background disconnect", fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (seconds == MainViewModel.NEVER_DISCONNECT) {
+                        "Keep connections while Android keeps the app alive"
+                    } else {
+                        "Disconnect after the app is away for ${timeoutLabel(seconds)}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { showDialog = true }) { Text(timeoutLabel(seconds)) }
+        }
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Background disconnect") },
+            text = {
+                Column {
+                    Text(
+                        "Choose how long connections stay active after leaving Battery Monitor.",
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    MainViewModel.BACKGROUND_TIMEOUT_OPTIONS_SECONDS.forEach { option ->
+                        TextButton(
+                            onClick = {
+                                onSecondsChange(option)
+                                showDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                if (option == seconds) "✓  ${timeoutLabel(option)}" else timeoutLabel(option),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
 private fun EmptyCard(title: String, body: String, action: String, onAction: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -641,3 +768,14 @@ private fun signedFormat(value: Double, unit: String): String =
 
 private fun formatTimestamp(timestamp: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(timestamp))
+
+private fun timeoutLabel(seconds: Int): String = when (seconds) {
+    MainViewModel.NEVER_DISCONNECT -> "Never"
+    5 -> "5 seconds"
+    10 -> "10 seconds"
+    30 -> "30 seconds"
+    60 -> "1 minute"
+    300 -> "5 minutes"
+    1_800 -> "30 minutes"
+    else -> "$seconds seconds"
+}

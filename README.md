@@ -7,6 +7,8 @@ A small, native Android app for monitoring multiple JBD / Jiabaida / Xiaoxiang /
 - Finds nearby JBD BLE modules and supports simultaneous connections to multiple BMS devices.
 - Remembers successfully connected devices and their last telemetry/settings snapshot across app restarts.
 - Shows last-connected and last-updated timestamps and allows direct reconnect without scanning first.
+- Keeps BLE connections alive while switching apps, then disconnects after a configurable background timeout (5 seconds to 30 minutes, or never; default 10 seconds).
+- Provides a dedicated app Settings screen, opened from the cogwheel in the main toolbar.
 - Shows state of charge, pack voltage, signed current, calculated power, remaining/full capacity, cycle count, and charge/discharge MOS state.
 - Shows every cell voltage, lowest/highest/average cell, balancing state, and pack cell delta.
 - Shows all reported NTC temperature sensors.

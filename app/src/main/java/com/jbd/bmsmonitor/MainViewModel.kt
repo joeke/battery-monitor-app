@@ -1,12 +1,23 @@
 package com.jbd.bmsmonitor
 
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import com.jbd.bmsmonitor.ble.JbdBleRepository
 import com.jbd.bmsmonitor.model.DiscoveredBms
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = JbdBleRepository(application)
+    private val preferences = application.getSharedPreferences(APP_PREFERENCES, Application.MODE_PRIVATE)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var backgroundedAtRealtime: Long? = null
+
+    private val _backgroundDisconnectSeconds = MutableStateFlow(loadBackgroundTimeoutSeconds())
+    val backgroundDisconnectSeconds = _backgroundDisconnectSeconds.asStateFlow()
 
     val discovered = repository.discovered
     val devices = repository.devices
@@ -20,7 +31,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun disconnect(address: String) = repository.disconnect(address)
     fun reconnect(address: String) = repository.reconnect(address)
 
+    fun setBackgroundDisconnectSeconds(seconds: Int) {
+        require(seconds in BACKGROUND_TIMEOUT_OPTIONS_SECONDS)
+        _backgroundDisconnectSeconds.value = seconds
+        preferences.edit()
+            .putInt(KEY_BACKGROUND_TIMEOUT_SECONDS, seconds)
+            .remove(LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES)
+            .apply()
+    }
+
+    fun onAppBackgrounded() {
+        mainHandler.removeCallbacks(disconnectAfterBackgroundTimeout)
+        val seconds = _backgroundDisconnectSeconds.value
+        if (seconds == NEVER_DISCONNECT) {
+            backgroundedAtRealtime = null
+            return
+        }
+        backgroundedAtRealtime = SystemClock.elapsedRealtime()
+        mainHandler.postDelayed(disconnectAfterBackgroundTimeout, seconds * 1_000L)
+    }
+
+    fun onAppForegrounded() {
+        val backgroundedAt = backgroundedAtRealtime
+        val timeoutSeconds = _backgroundDisconnectSeconds.value
+        mainHandler.removeCallbacks(disconnectAfterBackgroundTimeout)
+        backgroundedAtRealtime = null
+        if (
+            backgroundedAt != null &&
+            timeoutSeconds != NEVER_DISCONNECT &&
+            SystemClock.elapsedRealtime() - backgroundedAt >= timeoutSeconds * 1_000L
+        ) {
+            repository.disconnectAll()
+        }
+    }
+
+    private val disconnectAfterBackgroundTimeout = Runnable {
+        backgroundedAtRealtime = null
+        repository.disconnectAll()
+    }
+
+    private fun loadBackgroundTimeoutSeconds(): Int {
+        val stored = when {
+            preferences.contains(KEY_BACKGROUND_TIMEOUT_SECONDS) ->
+                preferences.getInt(KEY_BACKGROUND_TIMEOUT_SECONDS, DEFAULT_BACKGROUND_TIMEOUT_SECONDS)
+            preferences.contains(LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES) ->
+                preferences.getInt(LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES, 5) * 60
+            else -> DEFAULT_BACKGROUND_TIMEOUT_SECONDS
+        }
+        return stored.takeIf { it in BACKGROUND_TIMEOUT_OPTIONS_SECONDS }
+            ?: DEFAULT_BACKGROUND_TIMEOUT_SECONDS
+    }
+
     override fun onCleared() {
+        mainHandler.removeCallbacks(disconnectAfterBackgroundTimeout)
         repository.close()
+    }
+
+    companion object {
+        val BACKGROUND_TIMEOUT_OPTIONS_SECONDS = listOf(5, 10, 30, 60, 300, 1_800, NEVER_DISCONNECT)
+        const val NEVER_DISCONNECT = 0
+        private const val DEFAULT_BACKGROUND_TIMEOUT_SECONDS = 10
+        private const val APP_PREFERENCES = "app_preferences"
+        private const val KEY_BACKGROUND_TIMEOUT_SECONDS = "background_disconnect_seconds"
+        private const val LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES = "background_disconnect_minutes"
     }
 }

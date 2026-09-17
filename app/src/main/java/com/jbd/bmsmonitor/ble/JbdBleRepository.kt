@@ -135,6 +135,10 @@ class JbdBleRepository(private val context: Context) {
         updateDevice(address) { it.copy(connectionStatus = ConnectionStatus.DISCONNECTED) }
     }
 
+    fun disconnectAll() {
+        connections.keys.toList().forEach(::disconnect)
+    }
+
     fun reconnect(address: String) {
         val state = _devices.value[address] ?: return
         connect(DiscoveredBms(address, state.name, state.rssi))
