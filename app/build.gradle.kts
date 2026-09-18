@@ -18,12 +18,21 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("testRelease") {
+            storeFile = rootProject.file("signing/test-release.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             // This project distributes test APKs directly, not through an app store.
-            // Using the local debug key keeps release builds installable over prior test builds.
-            signingConfig = signingConfigs.getByName("debug")
+            // This shared test key makes release APKs upgrade-compatible across build machines.
+            signingConfig = signingConfigs.getByName("testRelease")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
