@@ -9,7 +9,7 @@ A small, native Android app for monitoring multiple JBD / Jiabaida / Xiaoxiang /
 - Shows last-connected and last-updated timestamps and allows direct reconnect without scanning first.
 - Keeps BLE connections alive while switching apps, then disconnects after a configurable background timeout (5 seconds to 30 minutes, or never; default 10 seconds).
 - Provides a dedicated app Settings screen, opened from the cogwheel in the main toolbar.
-- Stores an optional joeke.dev upload configuration with an on/off switch, HTTPS endpoint, and masked API key (`X-Api-Key`). Network uploading remains disabled until the server endpoint and payload are defined.
+- Optionally uploads each connected BMS reading about once per minute to a configured HTTPS endpoint, authenticated with a masked API key (`X-Api-Key`). Uploading is disabled by default and runs only while the app is in the foreground.
 - Shows state of charge, pack voltage, signed current, calculated power, remaining/full capacity, cycle count, and charge/discharge MOS state.
 - Shows every cell voltage, lowest/highest/average cell, balancing state, and pack cell delta.
 - Shows all reported NTC temperature sensors.

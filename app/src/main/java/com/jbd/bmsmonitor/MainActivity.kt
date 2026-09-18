@@ -699,7 +699,7 @@ private fun ServerUploadCard(
                     value = serverUrl,
                     onValueChange = { serverUrl = it },
                     label = { Text("Server URL") },
-                    placeholder = { Text("https://joeke.dev/api/…") },
+                    placeholder = { Text("https://joeke.dev/api/battery-data") },
                     supportingText = {
                         Text(if (serverUrl.isBlank() || hasValidUrl) "HTTPS endpoint" else "Enter a valid HTTPS URL")
                     },
@@ -725,7 +725,7 @@ private fun ServerUploadCard(
                     Text("Save server configuration")
                 }
                 Text(
-                    "Configuration only for now; no data is sent until the endpoint and payload are implemented.",
+                    "While the app is open, each connected BMS uploads about once per minute.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

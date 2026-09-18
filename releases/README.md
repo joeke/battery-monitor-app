@@ -6,5 +6,8 @@ They are signed with the developer machine's Android debug key so they can updat
 
 | APK | Version | SHA-256 |
 | --- | --- | --- |
+| `Battery-Monitor-0.4.1.apk` | 0.4.1 (6) | `63ba02d046ae2514183b830fef2f0172c99dd3cf2a1a4a490407bbe4d9008280` |
 | `Battery-Monitor-0.3.0.apk` | 0.3.0 (5) | `485c1dc9b1c89a835c0a5c4d1ee97a185bac3edc8fe72daaaf57f00073bdd4d3` |
 | `Battery-Monitor-0.2.0.apk` | 0.2.0 (2) | `79c7dccb80fc6229071dab6fde5ee93829fd01bce7ec2589f83f449eaefc4149` |
+
+Version 0.4.1 starts a new signing lineage using the persistent Windows-host debug key. Earlier APKs were signed on macOS, so they must be uninstalled before installing 0.4.1.
