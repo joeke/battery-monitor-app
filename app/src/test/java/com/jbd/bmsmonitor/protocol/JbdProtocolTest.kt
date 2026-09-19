@@ -17,6 +17,14 @@ class JbdProtocolTest {
     }
 
     @Test
+    fun `default password authentication command has documented bytes`() {
+        assertArrayEquals(
+            hex("DD 5A 06 07 06 31 32 33 34 35 36 FE B8 77"),
+            JbdProtocol.usePassword("123456"),
+        )
+    }
+
+    @Test
     fun `fragmented basic info frame is reassembled and parsed`() {
         val raw = hex(
             "DD 03 00 1D 06 17 00 00 01 F3 01 F4 00 00 2C 7C 00 00 " +

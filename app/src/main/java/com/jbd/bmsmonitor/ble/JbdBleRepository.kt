@@ -183,6 +183,7 @@ class JbdBleRepository(private val context: Context) {
         private var writeCharacteristic: BluetoothGattCharacteristic? = null
         private var phase = Phase.STARTING
         private var settingsIndex = 0
+        private var defaultPasswordAttempted = false
         private var expectedRegister: Int? = null
         private var closed = false
 
@@ -310,6 +311,10 @@ class JbdBleRepository(private val context: Context) {
                     settingsIndex = 0
                     readNextSetting()
                 }
+                Phase.AUTHENTICATE -> {
+                    phase = Phase.ENTER_FACTORY
+                    send(JbdProtocol.enterFactoryMode(), JbdProtocol.ENTER_FACTORY)
+                }
                 Phase.SETTINGS -> {
                     updateDevice(address) {
                         it.copy(settings = JbdParser.applySetting(frame.register, frame.payload, it.settings))
@@ -330,10 +335,12 @@ class JbdBleRepository(private val context: Context) {
         private fun handleRegisterError(register: Int, status: Int) {
             when (phase) {
                 Phase.ENTER_FACTORY -> {
-                    updateDevice(address) {
-                        it.copy(settings = it.settings.copy(unavailableReason = "Settings access denied by BMS (status $status)"))
-                    }
-                    scheduleNextPoll()
+                    authenticateWithDefaultPasswordOrFail(
+                        "Settings access denied by BMS (status $status)",
+                    )
+                }
+                Phase.AUTHENTICATE -> {
+                    settingsUnavailable("Default BMS password was rejected (status $status)")
                 }
                 Phase.SETTINGS -> {
                     settingsIndex++
@@ -357,6 +364,23 @@ class JbdBleRepository(private val context: Context) {
             } else {
                 sendRead(JbdProtocol.SETTINGS_REGISTERS[settingsIndex])
             }
+        }
+
+        private fun authenticateWithDefaultPasswordOrFail(failureReason: String) {
+            if (defaultPasswordAttempted) {
+                settingsUnavailable(failureReason)
+                return
+            }
+            defaultPasswordAttempted = true
+            phase = Phase.AUTHENTICATE
+            send(JbdProtocol.usePassword(DEFAULT_CONFIGURATION_PASSWORD), JbdProtocol.USE_PASSWORD)
+        }
+
+        private fun settingsUnavailable(reason: String) {
+            updateDevice(address) {
+                it.copy(settings = it.settings.copy(loaded = false, unavailableReason = reason))
+            }
+            scheduleNextPoll()
         }
 
         private fun scheduleNextPoll() {
@@ -406,11 +430,14 @@ class JbdBleRepository(private val context: Context) {
                     phase = Phase.ENTER_FACTORY
                     send(JbdProtocol.enterFactoryMode(), JbdProtocol.ENTER_FACTORY)
                 }
-                Phase.ENTER_FACTORY, Phase.EXIT_FACTORY -> {
-                    updateDevice(address) {
-                        it.copy(settings = it.settings.copy(unavailableReason = "Settings are not supported by this BMS"))
-                    }
-                    scheduleNextPoll()
+                Phase.ENTER_FACTORY -> {
+                    authenticateWithDefaultPasswordOrFail("Settings are not supported by this BMS")
+                }
+                Phase.AUTHENTICATE -> {
+                    settingsUnavailable("The BMS did not accept the default configuration password")
+                }
+                Phase.EXIT_FACTORY -> {
+                    settingsUnavailable("The BMS did not confirm that it exited configuration mode")
                 }
                 else -> {
                     updateDevice(address) { it.copy(error = "BMS did not respond") }
@@ -443,6 +470,7 @@ class JbdBleRepository(private val context: Context) {
         INITIAL_CELLS,
         HARDWARE,
         ENTER_FACTORY,
+        AUTHENTICATE,
         SETTINGS,
         EXIT_FACTORY,
         POLL_BASIC,
@@ -458,5 +486,6 @@ class JbdBleRepository(private val context: Context) {
         private const val POLL_INTERVAL_MS = 2_000L
         private const val REQUEST_TIMEOUT_MS = 2_500L
         private const val PERSIST_INTERVAL_MS = 5_000L
+        private const val DEFAULT_CONFIGURATION_PASSWORD = "123456"
     }
 }

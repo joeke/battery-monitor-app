@@ -16,6 +16,7 @@ object JbdProtocol {
     const val HARDWARE_VERSION = 0x05
     const val ENTER_FACTORY = 0x00
     const val EXIT_FACTORY = 0x01
+    const val USE_PASSWORD = 0x06
 
     val SETTINGS_REGISTERS = listOf(
         0x10, // design capacity
@@ -39,6 +40,13 @@ object JbdProtocol {
 
     /** Changes only the volatile access mode. It never commits EEPROM settings. */
     fun enterFactoryMode(): ByteArray = command(0x5A, ENTER_FACTORY, byteArrayOf(0x56, 0x78))
+
+    /** Authenticates for the current connection without changing the stored password. */
+    fun usePassword(password: String): ByteArray {
+        require(password.length == 6 && password.all { it.code in 0x20..0x7E })
+        val passwordBytes = password.toByteArray(StandardCharsets.US_ASCII)
+        return command(0x5A, USE_PASSWORD, byteArrayOf(passwordBytes.size.toByte()) + passwordBytes)
+    }
 
     /** 00 00 exits without saving or resetting error counters. */
     fun exitFactoryMode(): ByteArray = command(0x5A, EXIT_FACTORY, byteArrayOf(0x00, 0x00))
