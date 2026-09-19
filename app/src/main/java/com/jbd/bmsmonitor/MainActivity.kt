@@ -74,6 +74,7 @@ import com.jbd.bmsmonitor.model.BmsTelemetry
 import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.model.ServerUploadConfig
+import com.jbd.bmsmonitor.network.ServerConnectionCheckResult
 import java.net.URI
 import java.text.DateFormat
 import java.util.Date
@@ -122,6 +123,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val scanning by viewModel.scanning.collectAsStateWithLifecycle()
     val backgroundDisconnectSeconds by viewModel.backgroundDisconnectSeconds.collectAsStateWithLifecycle()
     val serverUploadConfig by viewModel.serverUploadConfig.collectAsStateWithLifecycle()
+    val serverConnectionCheck by viewModel.serverConnectionCheck.collectAsStateWithLifecycle()
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     var showAppSettings by remember { mutableStateOf(false) }
     val selected = selectedAddress?.let(devices::get)
@@ -152,8 +154,10 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
             backgroundDisconnectSeconds = backgroundDisconnectSeconds,
             onBackgroundDisconnectSecondsChange = viewModel::setBackgroundDisconnectSeconds,
             serverUploadConfig = serverUploadConfig,
+            serverConnectionCheck = serverConnectionCheck,
             onServerUploadEnabledChange = viewModel::setServerUploadEnabled,
             onSaveServerUploadConfiguration = viewModel::saveServerUploadConfiguration,
+            onServerUploadDraftChange = viewModel::clearServerConnectionCheck,
             onBack = { showAppSettings = false },
         )
         selected != null -> DeviceDetailScreen(
@@ -182,8 +186,10 @@ private fun AppSettingsScreen(
     backgroundDisconnectSeconds: Int,
     onBackgroundDisconnectSecondsChange: (Int) -> Unit,
     serverUploadConfig: ServerUploadConfig,
+    serverConnectionCheck: MainViewModel.ServerConnectionCheckState,
     onServerUploadEnabledChange: (Boolean) -> Unit,
     onSaveServerUploadConfiguration: (String, String) -> Unit,
+    onServerUploadDraftChange: () -> Unit,
     onBack: () -> Unit,
 ) {
     Scaffold(
@@ -207,12 +213,13 @@ private fun AppSettingsScreen(
                     onSecondsChange = onBackgroundDisconnectSecondsChange,
                 )
             }
-            item { SectionTitle("Server upload") }
             item {
                 ServerUploadCard(
                     config = serverUploadConfig,
+                    connectionCheck = serverConnectionCheck,
                     onEnabledChange = onServerUploadEnabledChange,
                     onSave = onSaveServerUploadConfiguration,
+                    onDraftChange = onServerUploadDraftChange,
                 )
             }
         }
@@ -667,8 +674,10 @@ private fun SectionTitle(text: String) {
 @Composable
 private fun ServerUploadCard(
     config: ServerUploadConfig,
+    connectionCheck: MainViewModel.ServerConnectionCheckState,
     onEnabledChange: (Boolean) -> Unit,
     onSave: (String, String) -> Unit,
+    onDraftChange: () -> Unit,
 ) {
     var serverUrl by remember(config.serverUrl) { mutableStateOf(config.serverUrl) }
     var apiKey by remember(config.apiKey) { mutableStateOf(config.apiKey) }
@@ -684,9 +693,9 @@ private fun ServerUploadCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Send data periodically", fontWeight = FontWeight.SemiBold)
+                    Text("Store data on server", fontWeight = FontWeight.SemiBold)
                     Text(
-                        "Upload battery readings to joeke.dev",
+                        "Upload battery data to external server",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -697,7 +706,10 @@ private fun ServerUploadCard(
             if (config.enabled) {
                 OutlinedTextField(
                     value = serverUrl,
-                    onValueChange = { serverUrl = it },
+                    onValueChange = {
+                        serverUrl = it
+                        onDraftChange()
+                    },
                     label = { Text("Server URL") },
                     placeholder = { Text("https://joeke.dev/api/battery-data") },
                     supportingText = {
@@ -710,7 +722,10 @@ private fun ServerUploadCard(
                 )
                 OutlinedTextField(
                     value = apiKey,
-                    onValueChange = { apiKey = it },
+                    onValueChange = {
+                        apiKey = it
+                        onDraftChange()
+                    },
                     label = { Text("API key") },
                     supportingText = { Text("Sent using the X-Api-Key header") },
                     singleLine = true,
@@ -719,10 +734,29 @@ private fun ServerUploadCard(
                 )
                 Button(
                     onClick = { onSave(serverUrl, apiKey) },
-                    enabled = hasValidUrl && apiKey.isNotBlank(),
+                    enabled = hasValidUrl && apiKey.isNotBlank() &&
+                        connectionCheck != MainViewModel.ServerConnectionCheckState.Checking,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Save server configuration")
+                    if (connectionCheck == MainViewModel.ServerConnectionCheckState.Checking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Checking connection…")
+                    } else {
+                        Text("Save and test connection")
+                    }
+                }
+                if (connectionCheck is MainViewModel.ServerConnectionCheckState.Complete) {
+                    val (message, isError) = connectionCheckMessage(connectionCheck.result)
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    )
                 }
                 Text(
                     "While the app is open, each connected BMS uploads about once per minute.",
@@ -732,6 +766,17 @@ private fun ServerUploadCard(
             }
         }
     }
+}
+
+private fun connectionCheckMessage(result: ServerConnectionCheckResult): Pair<String, Boolean> = when (result) {
+    ServerConnectionCheckResult.Success -> "Connected successfully. The URL and API key are valid." to false
+    ServerConnectionCheckResult.InvalidUrl -> "Enter a valid HTTPS endpoint." to true
+    ServerConnectionCheckResult.InvalidApiKey -> "Authentication failed. Check the API key." to true
+    ServerConnectionCheckResult.NotFound -> "Endpoint not found. Check the server URL." to true
+    ServerConnectionCheckResult.RateLimited -> "The server rate limit was reached. Try again shortly." to true
+    ServerConnectionCheckResult.NetworkError -> "Could not reach the server. Check the network, URL, and TLS certificate." to true
+    is ServerConnectionCheckResult.UnexpectedResponse ->
+        "The server returned HTTP ${result.statusCode}." to true
 }
 
 @Composable

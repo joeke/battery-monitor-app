@@ -11,10 +11,12 @@ import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.model.ServerUploadConfig
 import com.jbd.bmsmonitor.network.BatteryDataUploader
+import com.jbd.bmsmonitor.network.ServerConnectionCheckResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -25,6 +27,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var backgroundedAtRealtime: Long? = null
     private var appIsForegrounded = false
     private var uploadJob: Job? = null
+    private var connectionCheckJob: Job? = null
     private val lastUploadAttemptAt = mutableMapOf<String, Long>()
 
     private val _backgroundDisconnectSeconds = MutableStateFlow(loadBackgroundTimeoutSeconds())
@@ -38,6 +41,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         ),
     )
     val serverUploadConfig = _serverUploadConfig.asStateFlow()
+
+    private val _serverConnectionCheck = MutableStateFlow<ServerConnectionCheckState>(ServerConnectionCheckState.Idle)
+    val serverConnectionCheck = _serverConnectionCheck.asStateFlow()
 
     val discovered = repository.discovered
     val devices = repository.devices
@@ -61,6 +67,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setServerUploadEnabled(enabled: Boolean) {
+        if (!enabled) {
+            connectionCheckJob?.cancel()
+            _serverConnectionCheck.value = ServerConnectionCheckState.Idle
+        }
         _serverUploadConfig.value = _serverUploadConfig.value.copy(enabled = enabled)
         preferences.edit().putBoolean(KEY_SERVER_UPLOAD_ENABLED, enabled).apply()
         requestUploadCheck()
@@ -77,7 +87,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString(KEY_SERVER_URL, normalizedUrl)
             .putString(KEY_SERVER_API_KEY, normalizedApiKey)
             .apply()
+        checkServerConnection(normalizedUrl, normalizedApiKey)
         requestUploadCheck()
+    }
+
+    fun clearServerConnectionCheck() {
+        connectionCheckJob?.cancel()
+        _serverConnectionCheck.value = ServerConnectionCheckState.Idle
+    }
+
+    private fun checkServerConnection(serverUrl: String, apiKey: String) {
+        connectionCheckJob?.cancel()
+        _serverConnectionCheck.value = ServerConnectionCheckState.Checking
+        connectionCheckJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = batteryDataUploader.checkConnection(serverUrl, apiKey)
+            if (isActive) {
+                _serverConnectionCheck.value = ServerConnectionCheckState.Complete(result)
+            }
+        }
     }
 
     fun onAppBackgrounded() {
@@ -171,6 +198,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mainHandler.removeCallbacks(uploadCheck)
         mainHandler.removeCallbacks(disconnectAfterBackgroundTimeout)
         repository.close()
+    }
+
+    sealed interface ServerConnectionCheckState {
+        data object Idle : ServerConnectionCheckState
+        data object Checking : ServerConnectionCheckState
+        data class Complete(val result: ServerConnectionCheckResult) : ServerConnectionCheckState
     }
 
     companion object {

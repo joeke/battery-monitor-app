@@ -11,6 +11,16 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.time.Instant
 
+sealed interface ServerConnectionCheckResult {
+    data object Success : ServerConnectionCheckResult
+    data object InvalidUrl : ServerConnectionCheckResult
+    data object InvalidApiKey : ServerConnectionCheckResult
+    data object NotFound : ServerConnectionCheckResult
+    data object RateLimited : ServerConnectionCheckResult
+    data object NetworkError : ServerConnectionCheckResult
+    data class UnexpectedResponse(val statusCode: Int) : ServerConnectionCheckResult
+}
+
 class BatteryDataUploader(context: Context) {
     private val senderId = Settings.Secure.getString(
         context.contentResolver,
@@ -49,6 +59,46 @@ class BatteryDataUploader(context: Context) {
             connection.disconnect()
         }
     }
+
+    fun checkConnection(serverUrl: String, apiKey: String): ServerConnectionCheckResult {
+        val endpoint = connectionCheckEndpoint(serverUrl)
+            ?: return ServerConnectionCheckResult.InvalidUrl
+        val connection = (runCatching { endpoint.openConnection() }.getOrNull() as? HttpURLConnection)
+            ?: return ServerConnectionCheckResult.NetworkError
+
+        return try {
+            connection.requestMethod = "HEAD"
+            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.readTimeout = READ_TIMEOUT_MS
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("X-Api-Key", apiKey.trim())
+
+            when (val statusCode = connection.responseCode) {
+                HttpURLConnection.HTTP_OK -> ServerConnectionCheckResult.Success
+                HttpURLConnection.HTTP_UNAUTHORIZED -> ServerConnectionCheckResult.InvalidApiKey
+                HttpURLConnection.HTTP_NOT_FOUND -> ServerConnectionCheckResult.NotFound
+                429 -> ServerConnectionCheckResult.RateLimited
+                else -> ServerConnectionCheckResult.UnexpectedResponse(statusCode)
+            }
+        } catch (_: Exception) {
+            ServerConnectionCheckResult.NetworkError
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun connectionCheckEndpoint(serverUrl: String) = runCatching {
+        val trimmedUrl = serverUrl.trim()
+        val uri = URI(trimmedUrl)
+        require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank())
+        val withoutFragment = trimmedUrl.substringBefore('#')
+        val separator = when {
+            uri.rawQuery == null -> "?"
+            withoutFragment.endsWith('?') || withoutFragment.endsWith('&') -> ""
+            else -> "&"
+        }
+        URI("$withoutFragment${separator}per_page=1").toURL()
+    }.getOrNull()
 
     internal fun requestBody(device: BmsDeviceState): JSONObject {
         val telemetry = device.telemetry
