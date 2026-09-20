@@ -12,6 +12,11 @@ import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.model.ServerUploadConfig
 import com.jbd.bmsmonitor.network.BatteryDataUploader
 import com.jbd.bmsmonitor.network.ServerConnectionCheckResult
+import com.jbd.bmsmonitor.update.AppUpdateManager
+import com.jbd.bmsmonitor.update.UpdateCheckResult
+import com.jbd.bmsmonitor.update.UpdateDownloadResult
+import com.jbd.bmsmonitor.update.UpdateRelease
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,10 +29,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val preferences = application.getSharedPreferences(APP_PREFERENCES, Application.MODE_PRIVATE)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val batteryDataUploader = BatteryDataUploader(application)
+    private val appUpdateManager = AppUpdateManager(application)
     private var backgroundedAtRealtime: Long? = null
     private var appIsForegrounded = false
     private var uploadJob: Job? = null
     private var connectionCheckJob: Job? = null
+    private var appUpdateJob: Job? = null
     private val lastUploadAttemptAt = mutableMapOf<String, Long>()
 
     private val _backgroundDisconnectSeconds = MutableStateFlow(loadBackgroundTimeoutSeconds())
@@ -44,6 +51,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _serverConnectionCheck = MutableStateFlow<ServerConnectionCheckState>(ServerConnectionCheckState.Idle)
     val serverConnectionCheck = _serverConnectionCheck.asStateFlow()
+
+    private val _appUpdateState = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
+    val appUpdateState = _appUpdateState.asStateFlow()
 
     val discovered = repository.discovered
     val devices = repository.devices
@@ -94,6 +104,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearServerConnectionCheck() {
         connectionCheckJob?.cancel()
         _serverConnectionCheck.value = ServerConnectionCheckState.Idle
+    }
+
+    fun checkForAppUpdate() {
+        if (
+            appUpdateJob?.isActive == true ||
+            _appUpdateState.value is AppUpdateState.Available ||
+            _appUpdateState.value is AppUpdateState.ReadyToInstall
+        ) return
+        _appUpdateState.value = AppUpdateState.Checking
+        appUpdateJob = viewModelScope.launch(Dispatchers.IO) {
+            _appUpdateState.value = when (val result = appUpdateManager.checkForUpdate()) {
+                is UpdateCheckResult.Available -> AppUpdateState.Available(result.release)
+                is UpdateCheckResult.UpToDate -> AppUpdateState.UpToDate(result.latestVersion)
+                is UpdateCheckResult.Failed -> AppUpdateState.Error(result.message)
+            }
+        }
+    }
+
+    fun downloadAppUpdate() {
+        val release = (_appUpdateState.value as? AppUpdateState.Available)?.release ?: return
+        if (appUpdateJob?.isActive == true) return
+        _appUpdateState.value = AppUpdateState.Downloading(release)
+        appUpdateJob = viewModelScope.launch(Dispatchers.IO) {
+            _appUpdateState.value = when (val result = appUpdateManager.downloadAndValidate(release)) {
+                is UpdateDownloadResult.Ready -> AppUpdateState.ReadyToInstall(release, result.file)
+                is UpdateDownloadResult.Failed -> AppUpdateState.Error(result.message)
+            }
+        }
+    }
+
+    fun installDownloadedUpdate() {
+        val ready = _appUpdateState.value as? AppUpdateState.ReadyToInstall ?: return
+        runCatching {
+            getApplication<Application>().startActivity(appUpdateManager.createInstallIntent(ready.file))
+        }.onFailure {
+            _appUpdateState.value = AppUpdateState.Error("Android could not open the package installer.")
+        }
     }
 
     private fun checkServerConnection(serverUrl: String, apiKey: String) {
@@ -204,6 +251,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         data object Idle : ServerConnectionCheckState
         data object Checking : ServerConnectionCheckState
         data class Complete(val result: ServerConnectionCheckResult) : ServerConnectionCheckState
+    }
+
+    sealed interface AppUpdateState {
+        data object Idle : AppUpdateState
+        data object Checking : AppUpdateState
+        data class UpToDate(val latestVersion: String) : AppUpdateState
+        data class Available(val release: UpdateRelease) : AppUpdateState
+        data class Downloading(val release: UpdateRelease) : AppUpdateState
+        data class ReadyToInstall(val release: UpdateRelease, val file: File) : AppUpdateState
+        data class Error(val message: String) : AppUpdateState
     }
 
     companion object {

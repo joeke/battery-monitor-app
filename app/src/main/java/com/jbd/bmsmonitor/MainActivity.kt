@@ -4,8 +4,10 @@ import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -51,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -117,6 +120,13 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val enableBluetoothLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { permissionRevision++ }
+    val updateInstallPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        if (context.packageManager.canRequestPackageInstalls()) {
+            viewModel.installDownloadedUpdate()
+        }
+    }
 
     val discovered by viewModel.discovered.collectAsStateWithLifecycle()
     val devices by viewModel.devices.collectAsStateWithLifecycle()
@@ -124,6 +134,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val backgroundDisconnectSeconds by viewModel.backgroundDisconnectSeconds.collectAsStateWithLifecycle()
     val serverUploadConfig by viewModel.serverUploadConfig.collectAsStateWithLifecycle()
     val serverConnectionCheck by viewModel.serverConnectionCheck.collectAsStateWithLifecycle()
+    val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     var showAppSettings by remember { mutableStateOf(false) }
     val selected = selectedAddress?.let(devices::get)
@@ -158,6 +169,21 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
             onServerUploadEnabledChange = viewModel::setServerUploadEnabled,
             onSaveServerUploadConfiguration = viewModel::saveServerUploadConfiguration,
             onServerUploadDraftChange = viewModel::clearServerConnectionCheck,
+            appUpdateState = appUpdateState,
+            onCheckForUpdate = viewModel::checkForAppUpdate,
+            onDownloadUpdate = viewModel::downloadAppUpdate,
+            onInstallUpdate = {
+                if (context.packageManager.canRequestPackageInstalls()) {
+                    viewModel.installDownloadedUpdate()
+                } else {
+                    updateInstallPermissionLauncher.launch(
+                        Intent(
+                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:${context.packageName}"),
+                        ),
+                    )
+                }
+            },
             onBack = { showAppSettings = false },
         )
         selected != null -> DeviceDetailScreen(
@@ -190,8 +216,14 @@ private fun AppSettingsScreen(
     onServerUploadEnabledChange: (Boolean) -> Unit,
     onSaveServerUploadConfiguration: (String, String) -> Unit,
     onServerUploadDraftChange: () -> Unit,
+    appUpdateState: MainViewModel.AppUpdateState,
+    onCheckForUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdate: () -> Unit,
     onBack: () -> Unit,
 ) {
+    LaunchedEffect(Unit) { onCheckForUpdate() }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -220,6 +252,15 @@ private fun AppSettingsScreen(
                     onEnabledChange = onServerUploadEnabledChange,
                     onSave = onSaveServerUploadConfiguration,
                     onDraftChange = onServerUploadDraftChange,
+                )
+            }
+            item { SectionTitle("Application") }
+            item {
+                AppUpdateCard(
+                    state = appUpdateState,
+                    onCheck = onCheckForUpdate,
+                    onDownload = onDownloadUpdate,
+                    onInstall = onInstallUpdate,
                 )
             }
         }
@@ -669,6 +710,72 @@ private fun StatusDot(status: ConnectionStatus) {
 @Composable
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+private fun AppUpdateCard(
+    state: MainViewModel.AppUpdateState,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    val busy = state is MainViewModel.AppUpdateState.Checking ||
+        state is MainViewModel.AppUpdateState.Downloading
+    val status = when (state) {
+        MainViewModel.AppUpdateState.Idle -> "Check for a newer APK."
+        MainViewModel.AppUpdateState.Checking -> "Checking for updates…"
+        is MainViewModel.AppUpdateState.UpToDate -> "You have the latest version."
+        is MainViewModel.AppUpdateState.Available -> "Version ${state.release.versionName} is available."
+        is MainViewModel.AppUpdateState.Downloading -> "Downloading and verifying version ${state.release.versionName}…"
+        is MainViewModel.AppUpdateState.ReadyToInstall -> "Version ${state.release.versionName} is downloaded and verified."
+        is MainViewModel.AppUpdateState.Error -> state.message
+    }
+    val action = when (state) {
+        is MainViewModel.AppUpdateState.Available -> "Download update" to onDownload
+        is MainViewModel.AppUpdateState.ReadyToInstall -> "Install update" to onInstall
+        else -> "Check for updates" to onCheck
+    }
+
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("App updates", fontWeight = FontWeight.SemiBold)
+            Text(
+                "Installed version ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (busy) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state is MainViewModel.AppUpdateState.Error) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            Button(
+                onClick = action.second,
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(action.first)
+            }
+            Text(
+                "Android may ask you to allow installs from Battery Monitor before showing the installer.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable

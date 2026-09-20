@@ -9,6 +9,7 @@ A small, native Android app for monitoring multiple JBD / Jiabaida / Xiaoxiang /
 - Shows last-connected and last-updated timestamps and allows direct reconnect without scanning first.
 - Keeps BLE connections alive while switching apps, then disconnects after a configurable background timeout (5 seconds to 30 minutes, or never; default 10 seconds).
 - Provides a dedicated app Settings screen, opened from the cogwheel in the main toolbar.
+- Checks the latest GitHub Release from Settings and can securely download and hand a newer APK to Android's system installer.
 - Optionally uploads each connected BMS reading about once per minute to a configured HTTPS endpoint, authenticated with a masked API key (`X-Api-Key`). Uploading is disabled by default and runs only while the app is in the foreground.
 - Shows state of charge, pack voltage, signed current, calculated power, remaining/full capacity, cycle count, and charge/discharge MOS state.
 - Shows every cell voltage, lowest/highest/average cell, balancing state, and pack cell delta.
@@ -27,6 +28,28 @@ Open the project in Android Studio (JDK 17) and run the `app` configuration on a
 ```
 
 On Android 12+, grant the Nearby devices permission. On Android 8–11, Android requires location permission for BLE scanning. The app does not derive or store location.
+
+## App updates
+
+By default, the update checker reads the latest published release from `joeke/jbdbms-app` and uses the first attached file whose name ends in `.apk`. The repository and release must be public; the app does not embed a GitHub access token. Use a numeric tag such as `v0.5.0`, attach the release APK, and ensure its `versionCode` is higher than the installed build. Draft and pre-release entries are not returned by GitHub's latest-release endpoint.
+
+For a private repository or your own server, build with an HTTPS manifest URL:
+
+```shell
+./gradlew -PUPDATE_MANIFEST_URL=https://example.com/battery-monitor/latest.json assembleRelease
+```
+
+The manifest is a small static file, so the server does not need to expose a browsable folder:
+
+```json
+{
+  "versionName": "0.5.0",
+  "apkUrl": "https://example.com/battery-monitor/Battery-Monitor-0.5.0.apk",
+  "releasePageUrl": "https://example.com/battery-monitor/"
+}
+```
+
+Before offering the APK to Android, the app verifies that its package name is `com.jbd.bmsmonitor`, its version code is newer, and its signing certificate matches the installed app. Android 8.0+ also requires the user to explicitly allow Battery Monitor as an APK installation source; the app opens that system setting when needed.
 
 ## Device notes
 

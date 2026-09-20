@@ -4,6 +4,10 @@ These APKs are standalone release builds intended for direct installation and de
 
 Starting with 0.4.1, they are signed with the shared test key in `signing/test-release.keystore`, so builds made on different machines remain upgrade-compatible. The key and its credentials are intentionally public and must never be used for Play Store or production distribution.
 
+For the in-app updater, publish the APK as an asset on a non-draft, non-prerelease GitHub Release. Tag releases with a numeric version (for example `v0.5.0`) and increment both `versionCode` and `versionName` in `app/build.gradle.kts`. The attached APK must use the same signing key as the installed app.
+
+If GitHub is private, set the `UPDATE_MANIFEST_URL` Gradle property when building and host the static JSON manifest described in the project README instead.
+
 | APK | Version | SHA-256 |
 | --- | --- | --- |
 | `Battery-Monitor-0.4.3.apk` | 0.4.3 (8) | `b85536ac48f4be8fe3c46339296884ae081731f174e8b2a2d00ee5fa2a666814` |
