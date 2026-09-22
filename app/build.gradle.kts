@@ -5,7 +5,7 @@ plugins {
 }
 
 val updateManifestUrl = providers.gradleProperty("UPDATE_MANIFEST_URL")
-    .getOrElse("https://api.github.com/repos/joeke/jbdbms-app/releases/latest")
+    .getOrElse("https://joeke.dev/android-apps/battery-monitor/latest.json")
 val escapedUpdateManifestUrl = updateManifestUrl.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {

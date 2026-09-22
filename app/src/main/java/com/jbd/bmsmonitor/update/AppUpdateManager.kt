@@ -219,9 +219,8 @@ class AppUpdateManager(private val context: Context) {
         return (runCatching { URI(url).toURL().openConnection() }.getOrNull() as? HttpURLConnection)?.apply {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
-            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "Battery-Monitor/${BuildConfig.VERSION_NAME}")
-            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
         }
     }
 

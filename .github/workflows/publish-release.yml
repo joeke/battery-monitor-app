@@ -1,0 +1,121 @@
+name: Build and publish release APK
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: battery-monitor-production
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and upload to joeke.dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UPDATE_BASE_URL: https://joeke.dev/android-apps/battery-monitor
+
+    steps:
+      - name: Check out the release
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Validate release configuration
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)"
+          if [[ -z "$VERSION_NAME" ]]; then
+            echo "Could not read versionName from app/build.gradle.kts" >&2
+            exit 1
+          fi
+
+          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "v${VERSION_NAME}" ]]; then
+            echo "Release tag $GITHUB_REF_NAME does not match app version v${VERSION_NAME}" >&2
+            exit 1
+          fi
+
+          if [[ "$UPDATE_BASE_URL" != https://* ]]; then
+            echo "UPDATE_BASE_URL must start with https://" >&2
+            exit 1
+          fi
+
+          UPDATE_BASE_URL="${UPDATE_BASE_URL%/}"
+          APK_NAME="Battery-Monitor-${VERSION_NAME}.apk"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "UPDATE_BASE_URL=$UPDATE_BASE_URL" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        run: ./gradlew --no-daemon -PUPDATE_MANIFEST_URL="$UPDATE_BASE_URL/latest.json" testReleaseUnitTest assembleRelease
+
+      - name: Create update files
+        env:
+          VERSION_NAME: ${{ steps.release.outputs.version_name }}
+          APK_NAME: ${{ steps.release.outputs.apk_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p distribution
+          install -m 0644 app/build/outputs/apk/release/app-release.apk "distribution/$APK_NAME"
+          jq -n \
+            --arg versionName "$VERSION_NAME" \
+            --arg apkUrl "$UPDATE_BASE_URL/$APK_NAME" \
+            --arg releasePageUrl "$UPDATE_BASE_URL/" \
+            '{versionName: $versionName, apkUrl: $apkUrl, releasePageUrl: $releasePageUrl}' \
+            > distribution/latest.json
+          (cd distribution && sha256sum "$APK_NAME" > "$APK_NAME.sha256")
+
+      - name: Upload APK and checksum
+        uses: appleboy/scp-action@v1
+        with:
+          host: 188.245.189.168
+          username: ${{ secrets.hetzner_ssh_username }}
+          password: ${{ secrets.hetzner_ssh_password }}
+          source: "distribution/${{ steps.release.outputs.apk_name }},distribution/${{ steps.release.outputs.apk_name }}.sha256"
+          target: '/home/joeke_dev/htdocs/public/android-apps/battery-monitor/'
+          strip_components: 1
+          overwrite: true
+
+      # Publish the manifest only after the APK upload has completed.
+      - name: Publish update manifest
+        uses: appleboy/scp-action@v1
+        with:
+          host: 188.245.189.168
+          username: ${{ secrets.hetzner_ssh_username }}
+          password: ${{ secrets.hetzner_ssh_password }}
+          source: distribution/latest.json
+          target: '/home/joeke_dev/htdocs/public/android-apps/battery-monitor/'
+          strip_components: 1
+          overwrite: true
+
+      - name: Verify public update endpoint
+        env:
+          VERSION_NAME: ${{ steps.release.outputs.version_name }}
+          APK_NAME: ${{ steps.release.outputs.apk_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="$(curl --fail --silent --show-error --location --proto '=https' \
+            -H 'Cache-Control: no-cache' \
+            "$UPDATE_BASE_URL/latest.json?deployment=$GITHUB_RUN_ID")"
+          jq -e \
+            --arg versionName "$VERSION_NAME" \
+            --arg apkUrl "$UPDATE_BASE_URL/$APK_NAME" \
+            '.versionName == $versionName and .apkUrl == $apkUrl' \
+            <<< "$MANIFEST" > /dev/null
+          curl --fail --silent --show-error --location --proto '=https' \
+            --range 0-0 --output /dev/null "$UPDATE_BASE_URL/$APK_NAME"
