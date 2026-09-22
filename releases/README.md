@@ -4,7 +4,7 @@ These APKs are standalone release builds intended for direct installation and de
 
 Starting with 0.4.1, they are signed with the shared test key in `signing/test-release.keystore`, so builds made on different machines remain upgrade-compatible. The key and its credentials are intentionally public and must never be used for Play Store or production distribution.
 
-The GitHub Actions release workflow now builds and uploads the APK directly to `joeke.dev` over SSH. Tag releases with the exact app version (for example `v0.5.0`) and increment both `versionCode` and `versionName` in `app/build.gradle.kts`. GitHub Releases are only the private trigger; update checks and downloads do not depend on repository visibility. See the project README for the required Actions secrets and variables.
+The GitHub Actions release workflow uploads the highest versioned APK in this directory directly to `joeke.dev` over SSH whenever a new APK is pushed to `main`. Build and test the signed APK locally, name it `Battery-Monitor-<version>.apk`, and commit it together with the matching `versionCode` and `versionName` changes in `app/build.gradle.kts`. GitHub Releases and tags are not used. Update checks and downloads do not depend on repository visibility. See the project README for the release commands and required Actions secrets.
 
 | APK | Version | SHA-256 |
 | --- | --- | --- |

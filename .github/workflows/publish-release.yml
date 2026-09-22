@@ -1,8 +1,10 @@
-name: Build and publish release APK
+name: Publish release APK
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'releases/*.apk'
   workflow_dispatch:
 
 permissions:
@@ -14,63 +16,86 @@ concurrency:
 
 jobs:
   publish:
-    name: Build and upload to joeke.dev
+    name: Upload latest APK to joeke.dev
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     env:
       UPDATE_BASE_URL: https://joeke.dev/android-apps/battery-monitor
 
     steps:
-      - name: Check out the release
+      - name: Check out release files
         uses: actions/checkout@v7
-
-      - name: Set up Java
-        uses: actions/setup-java@v6
         with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
+          # The push event can contain multiple commits. Full history lets the
+          # workflow reliably distinguish a newly added APK from an edit or deletion.
+          fetch-depth: 0
 
-      - name: Validate release configuration
+      - name: Select latest release APK
         id: release
         shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
 
-          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)"
-          if [[ -z "$VERSION_NAME" ]]; then
-            echo "Could not read versionName from app/build.gradle.kts" >&2
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+              BEFORE_SHA="$(git hash-object -t tree /dev/null)"
+            fi
+
+            mapfile -t ADDED_APKS < <(
+              git diff --name-only --diff-filter=A "$BEFORE_SHA" "$GITHUB_SHA" -- 'releases/*.apk'
+            )
+            if (( ${#ADDED_APKS[@]} == 0 )); then
+              echo "No new APK was added; there is nothing to publish."
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          shopt -s nullglob
+          APKS=(releases/Battery-Monitor-*.apk)
+          if (( ${#APKS[@]} == 0 )); then
+            echo "No release APKs found in releases/." >&2
             exit 1
           fi
 
-          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "v${VERSION_NAME}" ]]; then
-            echo "Release tag $GITHUB_REF_NAME does not match app version v${VERSION_NAME}" >&2
+          APK_PATH="$(printf '%s\n' "${APKS[@]}" | sort -V | tail -n 1)"
+          APK_NAME="${APK_PATH##*/}"
+          if [[ ! "$APK_NAME" =~ ^Battery-Monitor-([0-9]+(\.[0-9]+)+)\.apk$ ]]; then
+            echo "Unexpected release filename: $APK_NAME" >&2
+            echo "Expected Battery-Monitor-<version>.apk" >&2
             exit 1
           fi
 
+          VERSION_NAME="${BASH_REMATCH[1]}"
+          if [[ ! -s "$APK_PATH" ]]; then
+            echo "Release APK is empty: $APK_PATH" >&2
+            exit 1
+          fi
           if [[ "$UPDATE_BASE_URL" != https://* ]]; then
             echo "UPDATE_BASE_URL must start with https://" >&2
             exit 1
           fi
 
-          UPDATE_BASE_URL="${UPDATE_BASE_URL%/}"
-          APK_NAME="Battery-Monitor-${VERSION_NAME}.apk"
+          echo "Publishing $APK_NAME"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
-          echo "UPDATE_BASE_URL=$UPDATE_BASE_URL" >> "$GITHUB_ENV"
-
-      - name: Build signed release APK
-        run: ./gradlew --no-daemon -PUPDATE_MANIFEST_URL="$UPDATE_BASE_URL/latest.json" testReleaseUnitTest assembleRelease
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "UPDATE_BASE_URL=${UPDATE_BASE_URL%/}" >> "$GITHUB_ENV"
 
       - name: Create update files
+        if: steps.release.outputs.publish == 'true'
         env:
           VERSION_NAME: ${{ steps.release.outputs.version_name }}
           APK_NAME: ${{ steps.release.outputs.apk_name }}
+          APK_PATH: ${{ steps.release.outputs.apk_path }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p distribution
-          install -m 0644 app/build/outputs/apk/release/app-release.apk "distribution/$APK_NAME"
+          install -m 0644 "$APK_PATH" "distribution/$APK_NAME"
           jq -n \
             --arg versionName "$VERSION_NAME" \
             --arg apkUrl "$UPDATE_BASE_URL/$APK_NAME" \
@@ -80,6 +105,7 @@ jobs:
           (cd distribution && sha256sum "$APK_NAME" > "$APK_NAME.sha256")
 
       - name: Upload APK and checksum
+        if: steps.release.outputs.publish == 'true'
         uses: appleboy/scp-action@v1
         with:
           host: 188.245.189.168
@@ -92,6 +118,7 @@ jobs:
 
       # Publish the manifest only after the APK upload has completed.
       - name: Publish update manifest
+        if: steps.release.outputs.publish == 'true'
         uses: appleboy/scp-action@v1
         with:
           host: 188.245.189.168
@@ -103,6 +130,7 @@ jobs:
           overwrite: true
 
       - name: Verify public update endpoint
+        if: steps.release.outputs.publish == 'true'
         env:
           VERSION_NAME: ${{ steps.release.outputs.version_name }}
           APK_NAME: ${{ steps.release.outputs.apk_name }}

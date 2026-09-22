@@ -33,7 +33,7 @@ On Android 12+, grant the Nearby devices permission. On Android 8–11, Android 
 
 Release builds check `https://joeke.dev/android-apps/battery-monitor/latest.json`. The GitHub repository may be private: the app only talks to the public HTTPS update directory and never contains GitHub or server credentials.
 
-The `Build and publish release APK` GitHub Actions workflow runs when a GitHub Release is published (and can also be started manually). It builds the signed APK, creates `latest.json` and a SHA-256 file, then uploads them with `appleboy/scp-action`. The APK and checksum are uploaded before the manifest, so clients cannot discover an APK before its upload has completed.
+The `Publish release APK` GitHub Actions workflow runs when a new `releases/*.apk` file is pushed to `main` (and can also be started manually). It selects the highest versioned `Battery-Monitor-<version>.apk` file, creates `latest.json` and a SHA-256 file, then uploads them with `appleboy/scp-action`. The APK and checksum are uploaded before the manifest, so clients cannot discover an APK before its upload has completed.
 
 The workflow mirrors the existing `joeke.dev` deployment configuration: it connects to `188.245.189.168` and publishes to `/home/joeke_dev/htdocs/public/android-apps/battery-monitor/`. Before running it, add these two repository secrets under **Settings → Secrets and variables → Actions**:
 
@@ -44,7 +44,14 @@ The workflow mirrors the existing `joeke.dev` deployment configuration: it conne
 
 The SSH account needs permission to create the target directory and replace files inside it.
 
-For an automatic release, increment both `versionCode` and `versionName` in `app/build.gradle.kts`, push the change, and publish a GitHub Release whose tag exactly matches `v<versionName>` (for example `v0.5.0`). The repository and the GitHub Release itself do not need to be public. A manual workflow run publishes the version currently on the selected branch.
+To publish a release, increment both `versionCode` and `versionName` in `app/build.gradle.kts`, build and test the signed APK locally, and copy it into `releases/` using the versioned filename:
+
+```shell
+./gradlew testReleaseUnitTest assembleRelease
+cp app/build/outputs/apk/release/app-release.apk releases/Battery-Monitor-0.5.0.apk
+```
+
+Commit the source changes and APK, then push them to `main`. Adding the APK triggers the workflow; editing or deleting an existing APK does not publish anything. A manual workflow run republishes the highest versioned APK on the selected branch. GitHub Releases and tags are not required.
 
 To build against a different update server locally, override the HTTPS manifest URL:
 

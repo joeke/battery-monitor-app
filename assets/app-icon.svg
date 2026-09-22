@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="48"
+     height="48"
+     viewBox="0 0 48 48">
+  <title>Battery Monitor</title>
+  <path
+      fill="#176B52"
+      d="M8,10 L38,10 Q42,10 42,14 L42,34 Q42,38 38,38 L8,38 Q4,38 4,34 L4,14 Q4,10 8,10 Z" />
+  <path fill="#176B52" d="M42,19 L46,19 L46,29 L42,29 Z" />
+  <path
+      fill="#C8F2DF"
+      d="M10,16 L18,16 L18,32 L10,32 Z M21,16 L29,16 L29,32 L21,32 Z M32,16 L37,16 L37,32 L32,32 Z" />
+</svg>
