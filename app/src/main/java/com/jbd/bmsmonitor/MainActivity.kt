@@ -291,7 +291,6 @@ private fun DeviceListScreen(
                 title = {
                     Column {
                         Text(stringResource(R.string.app_name), fontWeight = FontWeight.Bold)
-                        Text("Read-only battery telemetry", style = MaterialTheme.typography.labelMedium)
                     }
                 },
                 actions = {
