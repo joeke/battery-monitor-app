@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -227,7 +229,7 @@ private fun AppSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                navigationIcon = { TextButton(onClick = onBack) { Text("‹ Back") } },
+                navigationIcon = { OutlinedBackButton(onBack) },
                 title = { Text("Settings", fontWeight = FontWeight.SemiBold) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
@@ -434,37 +436,76 @@ private fun DeviceDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                navigationIcon = { TextButton(onClick = onBack) { Text("‹ Back") } },
+                navigationIcon = { OutlinedBackButton(onBack) },
                 title = {
                     Column {
                         Text(device.name, fontWeight = FontWeight.SemiBold)
                         Text(statusLabel(device.connectionStatus), style = MaterialTheme.typography.labelMedium)
                     }
                 },
-                actions = {
-                    TextButton(onClick = if (device.connectionStatus == ConnectionStatus.DISCONNECTED) onReconnect else onDisconnect) {
-                        Text(if (device.connectionStatus == ConnectionStatus.DISCONNECTED) "Reconnect" else "Disconnect")
-                    }
-                },
             )
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            if (device.connectionStatus == ConnectionStatus.DISCONNECTED) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(
+                            if (device.telemetry.updatedAtMillis > 0) {
+                                "Offline · showing the last saved snapshot from ${formatTimestamp(device.telemetry.updatedAtMillis)}"
+                            } else {
+                                "Offline · no saved snapshot yet"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        TextButton(onClick = onReconnect, modifier = Modifier.align(Alignment.End)) {
+                            Text("Reconnect")
+                        }
+                    }
+                }
+            }
             TabRow(selectedTabIndex = tab) {
                 listOf("Overview", "Cells", "Settings").forEachIndexed { index, label ->
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(label) })
                 }
             }
-            when (tab) {
-                0 -> OverviewTab(device)
-                1 -> CellsTab(device.telemetry)
-                else -> SettingsTab(
-                    settings = device.settings,
-                    liveCellCount = device.telemetry.cellCount,
-                    connected = device.connectionStatus == ConnectionStatus.CONNECTED,
-                )
+            Box(Modifier.weight(1f)) {
+                when (tab) {
+                    0 -> OverviewTab(device)
+                    1 -> CellsTab(device.telemetry)
+                    else -> SettingsTab(
+                        settings = device.settings,
+                        liveCellCount = device.telemetry.cellCount,
+                        connected = device.connectionStatus == ConnectionStatus.CONNECTED,
+                    )
+                }
+            }
+            if (device.connectionStatus != ConnectionStatus.DISCONNECTED) {
+                OutlinedButton(
+                    onClick = onDisconnect,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(48.dp),
+                ) {
+                    Text("Disconnect")
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun OutlinedBackButton(onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_arrow_back),
+            contentDescription = "Back",
+        )
     }
 }
 
@@ -476,20 +517,6 @@ private fun OverviewTab(device: BmsDeviceState) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (device.connectionStatus == ConnectionStatus.DISCONNECTED && t.updatedAtMillis > 0) {
-            item {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                ) {
-                    Text(
-                        "Offline · showing the last saved snapshot from ${formatTimestamp(t.updatedAtMillis)}",
-                        modifier = Modifier.padding(14.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-        }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
