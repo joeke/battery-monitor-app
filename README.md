@@ -48,7 +48,7 @@ To publish a release, increment both `versionCode` and `versionName` in `app/bui
 
 ```shell
 ./gradlew testReleaseUnitTest assembleRelease
-cp app/build/outputs/apk/release/app-release.apk releases/Battery-Monitor-0.5.0.apk
+cp app/build/outputs/apk/release/app-release.apk releases/Battery-Monitor-0.5.1.apk
 ```
 
 Commit the source changes and APK, then push them to `main`. Adding the APK triggers the workflow; editing or deleting an existing APK does not publish anything. A manual workflow run republishes the highest versioned APK on the selected branch. GitHub Releases and tags are not required.
