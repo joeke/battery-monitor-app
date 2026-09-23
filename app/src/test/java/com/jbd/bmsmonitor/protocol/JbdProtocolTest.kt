@@ -66,6 +66,20 @@ class JbdProtocolTest {
         assertEquals(4.2, result.cellOvervoltageV!!, 0.0001)
     }
 
+    @Test
+    fun `nonstandard checksum on empty factory acknowledgement is accepted`() {
+        val frames = JbdFrameAssembler().append(hex("DD 00 00 00 FF FF 77"))
+
+        assertEquals(1, frames.size)
+        assertEquals(JbdProtocol.ENTER_FACTORY, frames.single().register)
+        assertEquals(0, frames.single().status)
+    }
+
+    @Test
+    fun `invalid checksum on configuration data is rejected`() {
+        assertTrue(JbdFrameAssembler().append(hex("DD 10 00 02 0B B8 00 00 77")).isEmpty())
+    }
+
     private fun hex(value: String): ByteArray = value
         .trim()
         .split(Regex("\\s+"))

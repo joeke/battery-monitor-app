@@ -104,9 +104,15 @@ class JbdFrameAssembler {
             if (raw.last().toInt() and 0xFF != 0x77) continue
             val receivedChecksum = ((raw[frameLength - 3].toInt() and 0xFF) shl 8) or
                 (raw[frameLength - 2].toInt() and 0xFF)
-            if (JbdProtocol.checksum(raw, 2, payloadLength + 2) != receivedChecksum) continue
+            val checksumValid = JbdProtocol.checksum(raw, 2, payloadLength + 2) == receivedChecksum
+            // Some JBD firmware sends a nonstandard checksum for empty command acknowledgements.
+            // Never relax validation for telemetry or EEPROM data.
+            val register = raw[1].toInt() and 0xFF
+            val controlAcknowledgement = payloadLength == 0 &&
+                register in setOf(JbdProtocol.ENTER_FACTORY, JbdProtocol.EXIT_FACTORY, JbdProtocol.USE_PASSWORD)
+            if (!checksumValid && !controlAcknowledgement) continue
             frames += JbdFrame(
-                register = raw[1].toInt() and 0xFF,
+                register = register,
                 status = raw[2].toInt() and 0xFF,
                 payload = raw.copyOfRange(4, 4 + payloadLength),
             )

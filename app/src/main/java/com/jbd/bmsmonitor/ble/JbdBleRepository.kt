@@ -183,6 +183,7 @@ class JbdBleRepository(private val context: Context) {
         private var writeCharacteristic: BluetoothGattCharacteristic? = null
         private var phase = Phase.STARTING
         private var settingsIndex = 0
+        private var settingsReadCount = 0
         private var defaultPasswordAttempted = false
         private var expectedRegister: Int? = null
         private var closed = false
@@ -309,6 +310,7 @@ class JbdBleRepository(private val context: Context) {
                 Phase.ENTER_FACTORY -> {
                     phase = Phase.SETTINGS
                     settingsIndex = 0
+                    settingsReadCount = 0
                     readNextSetting()
                 }
                 Phase.AUTHENTICATE -> {
@@ -316,17 +318,17 @@ class JbdBleRepository(private val context: Context) {
                     send(JbdProtocol.enterFactoryMode(), JbdProtocol.ENTER_FACTORY)
                 }
                 Phase.SETTINGS -> {
-                    updateDevice(address) {
-                        it.copy(settings = JbdParser.applySetting(frame.register, frame.payload, it.settings))
+                    if (frame.payload.size >= 2) {
+                        settingsReadCount++
+                        updateDevice(address) {
+                            it.copy(settings = JbdParser.applySetting(frame.register, frame.payload, it.settings))
+                        }
                     }
                     settingsIndex++
                     readNextSetting()
                 }
                 Phase.EXIT_FACTORY -> {
-                    updateDevice(address) {
-                        it.copy(settings = it.settings.copy(loaded = true, unavailableReason = null))
-                    }
-                    scheduleNextPoll()
+                    finishSettings(exitConfirmed = true)
                 }
                 Phase.STARTING -> Unit
             }
@@ -379,6 +381,23 @@ class JbdBleRepository(private val context: Context) {
         private fun settingsUnavailable(reason: String) {
             updateDevice(address) {
                 it.copy(settings = it.settings.copy(loaded = false, unavailableReason = reason))
+            }
+            scheduleNextPoll()
+        }
+
+        private fun finishSettings(exitConfirmed: Boolean) {
+            val total = JbdProtocol.SETTINGS_REGISTERS.size
+            val readIssue = when {
+                settingsReadCount == 0 -> "The BMS did not return any configuration values"
+                settingsReadCount < total -> "Read $settingsReadCount of $total configuration values"
+                else -> null
+            }
+            val exitIssue = if (exitConfirmed) null else "Could not confirm exit from configuration mode"
+            updateDevice(address) {
+                it.copy(settings = it.settings.copy(
+                    loaded = settingsReadCount > 0,
+                    unavailableReason = listOfNotNull(readIssue, exitIssue).joinToString(". ").ifBlank { null },
+                ))
             }
             scheduleNextPoll()
         }
@@ -437,7 +456,7 @@ class JbdBleRepository(private val context: Context) {
                     settingsUnavailable("The BMS did not accept the default configuration password")
                 }
                 Phase.EXIT_FACTORY -> {
-                    settingsUnavailable("The BMS did not confirm that it exited configuration mode")
+                    finishSettings(exitConfirmed = false)
                 }
                 else -> {
                     updateDevice(address) { it.copy(error = "BMS did not respond") }
