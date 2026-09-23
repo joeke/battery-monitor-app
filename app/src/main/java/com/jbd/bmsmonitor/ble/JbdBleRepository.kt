@@ -20,13 +20,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.jbd.bmsmonitor.model.BmsDeviceState
-import com.jbd.bmsmonitor.model.BmsSettings
 import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.protocol.JbdFrame
 import com.jbd.bmsmonitor.protocol.JbdFrameAssembler
-import com.jbd.bmsmonitor.protocol.JbdParser
 import com.jbd.bmsmonitor.protocol.JbdProtocol
+import com.jbd.bmsmonitor.protocol.JbdReadSession
 import com.jbd.bmsmonitor.storage.SavedBmsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -186,15 +185,19 @@ class JbdBleRepository(private val context: Context) {
         private val address = initial.address
         private val assembler = JbdFrameAssembler()
         private var writeCharacteristic: BluetoothGattCharacteristic? = null
-        private var phase = Phase.STARTING
-        private var settingsIndex = 0
-        private var settingsReadCount = 0
-        private var defaultPasswordAttempted = false
         private var expectedRegister: Int? = null
-        private var closed = false
-        private var basicInfoReceived = false
-        @Volatile var initialReadingComplete = false
-            private set
+        private var requestId = 0L
+        @Volatile private var closed = false
+        private val session = JbdReadSession(
+            updateDevice = { transform -> updateDevice(address, transform) },
+            onInitialReading = { onInitialReading?.invoke(address) },
+            dispatch = { value, register, delay ->
+                mainHandler.postAtTime({
+                    if (!closed) send(value, register)
+                }, this, android.os.SystemClock.uptimeMillis() + delay)
+            },
+        )
+        val initialReadingComplete get() = session.initialReadingComplete
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
@@ -213,6 +216,7 @@ class JbdBleRepository(private val context: Context) {
                             )
                         }
                     }
+                    closed = true
                     mainHandler.removeCallbacksAndMessages(this)
                     gatt.close()
                 }
@@ -254,8 +258,7 @@ class JbdBleRepository(private val context: Context) {
                     lastConnectedAtMillis = System.currentTimeMillis(),
                 )
             }
-            phase = Phase.INITIAL_BASIC
-            sendRead(JbdProtocol.BASIC_INFO)
+            mainHandler.post { if (!closed) session.start() }
         }
 
         @Deprecated("Kept for Android 12 and earlier")
@@ -273,167 +276,23 @@ class JbdBleRepository(private val context: Context) {
         }
 
         private fun onBytes(bytes: ByteArray) {
-            assembler.append(bytes).forEach(::handleFrame)
+            val fragment = bytes.copyOf()
+            mainHandler.post {
+                if (!closed) assembler.append(fragment).forEach(::handleFrame)
+            }
         }
 
         private fun handleFrame(frame: JbdFrame) {
-            if (frame.register != expectedRegister) return
+            if (closed || frame.register != expectedRegister) return
             mainHandler.removeCallbacksAndMessages(this)
             expectedRegister = null
-
-            if (frame.status != 0) {
-                handleRegisterError(frame.register, frame.status)
-                return
-            }
-
-            when (phase) {
-                Phase.INITIAL_BASIC, Phase.POLL_BASIC -> {
-                    updateDevice(address) { current ->
-                        JbdParser.parseBasicInfo(frame.payload, current.telemetry)
-                            ?.let {
-                                basicInfoReceived = true
-                                current.copy(telemetry = it, error = null)
-                            }
-                            ?: current.copy(error = "Invalid basic-info frame")
-                    }
-                    phase = if (phase == Phase.INITIAL_BASIC) Phase.INITIAL_CELLS else Phase.POLL_CELLS
-                    sendRead(JbdProtocol.CELL_INFO)
-                }
-                Phase.INITIAL_CELLS, Phase.POLL_CELLS -> {
-                    val initialReading = phase == Phase.INITIAL_CELLS
-                    var readingComplete = false
-                    updateDevice(address) { current ->
-                        JbdParser.parseCells(frame.payload, current.telemetry)
-                            ?.let {
-                                readingComplete = true
-                                current.copy(telemetry = it, error = null)
-                            }
-                            ?: current.copy(error = "Invalid cell-voltage frame")
-                    }
-                    if (!initialReadingComplete && basicInfoReceived && readingComplete) {
-                        initialReadingComplete = true
-                        onInitialReading?.invoke(address)
-                    }
-                    if (initialReading) {
-                        phase = Phase.HARDWARE
-                        sendRead(JbdProtocol.HARDWARE_VERSION)
-                    } else {
-                        scheduleNextPoll()
-                    }
-                }
-                Phase.HARDWARE -> {
-                    val version = JbdParser.parseHardwareVersion(frame.payload)
-                    updateDevice(address) { it.copy(settings = it.settings.copy(hardwareVersion = version)) }
-                    phase = Phase.ENTER_FACTORY
-                    send(JbdProtocol.enterFactoryMode(), JbdProtocol.ENTER_FACTORY)
-                }
-                Phase.ENTER_FACTORY -> {
-                    phase = Phase.SETTINGS
-                    settingsIndex = 0
-                    settingsReadCount = 0
-                    readNextSetting()
-                }
-                Phase.AUTHENTICATE -> {
-                    phase = Phase.ENTER_FACTORY
-                    send(JbdProtocol.enterFactoryMode(), JbdProtocol.ENTER_FACTORY)
-                }
-                Phase.SETTINGS -> {
-                    if (frame.payload.size >= 2) {
-                        settingsReadCount++
-                        updateDevice(address) {
-                            it.copy(settings = JbdParser.applySetting(frame.register, frame.payload, it.settings))
-                        }
-                    }
-                    settingsIndex++
-                    readNextSetting()
-                }
-                Phase.EXIT_FACTORY -> {
-                    finishSettings(exitConfirmed = true)
-                }
-                Phase.STARTING -> Unit
-            }
+            session.handleFrame(frame)
         }
-
-        private fun handleRegisterError(register: Int, status: Int) {
-            when (phase) {
-                Phase.ENTER_FACTORY -> {
-                    authenticateWithDefaultPasswordOrFail(
-                        "Settings access denied by BMS (status $status)",
-                    )
-                }
-                Phase.AUTHENTICATE -> {
-                    settingsUnavailable("Default BMS password was rejected (status $status)")
-                }
-                Phase.SETTINGS -> {
-                    settingsIndex++
-                    readNextSetting()
-                }
-                Phase.HARDWARE -> {
-                    phase = Phase.ENTER_FACTORY
-                    send(JbdProtocol.enterFactoryMode(), JbdProtocol.ENTER_FACTORY)
-                }
-                else -> {
-                    updateDevice(address) { it.copy(error = "BMS rejected register 0x${register.toString(16)}") }
-                    scheduleNextPoll()
-                }
-            }
-        }
-
-        private fun readNextSetting() {
-            if (settingsIndex >= JbdProtocol.SETTINGS_REGISTERS.size) {
-                phase = Phase.EXIT_FACTORY
-                send(JbdProtocol.exitFactoryMode(), JbdProtocol.EXIT_FACTORY)
-            } else {
-                sendRead(JbdProtocol.SETTINGS_REGISTERS[settingsIndex])
-            }
-        }
-
-        private fun authenticateWithDefaultPasswordOrFail(failureReason: String) {
-            if (defaultPasswordAttempted) {
-                settingsUnavailable(failureReason)
-                return
-            }
-            defaultPasswordAttempted = true
-            phase = Phase.AUTHENTICATE
-            send(JbdProtocol.usePassword(DEFAULT_CONFIGURATION_PASSWORD), JbdProtocol.USE_PASSWORD)
-        }
-
-        private fun settingsUnavailable(reason: String) {
-            updateDevice(address) {
-                it.copy(settings = it.settings.copy(loaded = false, unavailableReason = reason))
-            }
-            scheduleNextPoll()
-        }
-
-        private fun finishSettings(exitConfirmed: Boolean) {
-            val total = JbdProtocol.SETTINGS_REGISTERS.size
-            val readIssue = when {
-                settingsReadCount == 0 -> "The BMS did not return any configuration values"
-                settingsReadCount < total -> "Read $settingsReadCount of $total configuration values"
-                else -> null
-            }
-            val exitIssue = if (exitConfirmed) null else "Could not confirm exit from configuration mode"
-            updateDevice(address) {
-                it.copy(settings = it.settings.copy(
-                    loaded = settingsReadCount > 0,
-                    unavailableReason = listOfNotNull(readIssue, exitIssue).joinToString(". ").ifBlank { null },
-                ))
-            }
-            scheduleNextPoll()
-        }
-
-        private fun scheduleNextPoll() {
-            phase = Phase.POLL_BASIC
-            mainHandler.postAtTime({
-                if (!closed) sendRead(JbdProtocol.BASIC_INFO)
-            }, this, android.os.SystemClock.uptimeMillis() + POLL_INTERVAL_MS)
-        }
-
-        private fun sendRead(register: Int) = send(JbdProtocol.read(register), register)
 
         private fun send(value: ByteArray, responseRegister: Int) {
             val characteristic = writeCharacteristic ?: return
             expectedRegister = responseRegister
+            val currentRequestId = ++requestId
             val noResponse = characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0
             val writeType = if (noResponse) {
                 BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
@@ -454,35 +313,12 @@ class JbdBleRepository(private val context: Context) {
                 fail("Android could not send a BLE request")
                 return
             }
-            mainHandler.postAtTime({ onRequestTimeout(responseRegister) }, this, android.os.SystemClock.uptimeMillis() + REQUEST_TIMEOUT_MS)
-        }
-
-        private fun onRequestTimeout(register: Int) {
-            if (expectedRegister != register || closed) return
-            expectedRegister = null
-            when (phase) {
-                Phase.SETTINGS -> {
-                    settingsIndex++
-                    readNextSetting()
+            mainHandler.postAtTime({
+                if (!closed && requestId == currentRequestId && expectedRegister == responseRegister) {
+                    expectedRegister = null
+                    session.onRequestTimeout()
                 }
-                Phase.HARDWARE -> {
-                    phase = Phase.ENTER_FACTORY
-                    send(JbdProtocol.enterFactoryMode(), JbdProtocol.ENTER_FACTORY)
-                }
-                Phase.ENTER_FACTORY -> {
-                    authenticateWithDefaultPasswordOrFail("Settings are not supported by this BMS")
-                }
-                Phase.AUTHENTICATE -> {
-                    settingsUnavailable("The BMS did not accept the default configuration password")
-                }
-                Phase.EXIT_FACTORY -> {
-                    finishSettings(exitConfirmed = false)
-                }
-                else -> {
-                    updateDevice(address) { it.copy(error = "BMS did not respond") }
-                    scheduleNextPoll()
-                }
-            }
+            }, this, android.os.SystemClock.uptimeMillis() + REQUEST_TIMEOUT_MS)
         }
 
         private fun fail(message: String) {
@@ -503,28 +339,13 @@ class JbdBleRepository(private val context: Context) {
         }
     }
 
-    private enum class Phase {
-        STARTING,
-        INITIAL_BASIC,
-        INITIAL_CELLS,
-        HARDWARE,
-        ENTER_FACTORY,
-        AUTHENTICATE,
-        SETTINGS,
-        EXIT_FACTORY,
-        POLL_BASIC,
-        POLL_CELLS,
-    }
-
     private object BluetoothDeviceTransport {
         const val LE = 2
     }
 
     companion object {
         private const val SCAN_DURATION_MS = 12_000L
-        private const val POLL_INTERVAL_MS = 2_000L
         private const val REQUEST_TIMEOUT_MS = 2_500L
         private const val PERSIST_INTERVAL_MS = 5_000L
-        private const val DEFAULT_CONFIGURATION_PASSWORD = "123456"
     }
 }
