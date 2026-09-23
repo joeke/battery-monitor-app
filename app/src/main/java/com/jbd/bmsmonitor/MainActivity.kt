@@ -152,7 +152,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
         )
         !permissionsGranted -> BlockingMessage(
             title = "Nearby devices permission",
-            body = "Allow Bluetooth access to find and connect to your JBD BMS. Scan results are not used for location.",
+            body = "Allow Bluetooth access to find and connect to your BMS. Scan results are not used for location.",
             action = "Allow access",
             onAction = { permissionLauncher.launch(requiredPermissions) },
         )
@@ -303,7 +303,6 @@ private fun DeviceListScreen(
                             contentDescription = "App settings",
                         )
                     }
-                    TextButton(onClick = onScan) { Text(if (scanning) "Stop" else "Scan") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
@@ -322,7 +321,7 @@ private fun DeviceListScreen(
             }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    SectionTitle("Nearby JBD devices")
+                    SectionTitle("Nearby devices")
                     if (scanning) {
                         Spacer(Modifier.width(10.dp))
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -381,33 +380,15 @@ private fun ConnectedDeviceCard(
                     Metric("Voltage", format(device.telemetry.packVoltageV, "V"))
                     Metric("Power", format(device.telemetry.powerW, "W"))
                 }
-                if (device.connectionStatus == ConnectionStatus.DISCONNECTED) {
-                    Text(
-                        "Last saved values",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
             if (device.lastConnectedAtMillis > 0 || device.telemetry.updatedAtMillis > 0) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (device.lastConnectedAtMillis > 0) {
                         TimestampText("Last connected", device.lastConnectedAtMillis)
                     }
-                    if (device.telemetry.updatedAtMillis > 0) {
-                        TimestampText("Last updated", device.telemetry.updatedAtMillis)
-                    }
                 }
             }
             device.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                if (device.connectionStatus != ConnectionStatus.DISCONNECTED) {
-                    TextButton(onClick = { onDisconnect(device.address) }) { Text("Disconnect") }
-                } else {
-                    TextButton(onClick = { onReconnect(device.address) }) { Text("Reconnect") }
-                }
-                TextButton(onClick = { onSelect(device.address) }) { Text("Details") }
-            }
         }
     }
 }
