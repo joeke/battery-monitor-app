@@ -15,7 +15,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -229,7 +228,7 @@ private fun AppSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                navigationIcon = { OutlinedBackButton(onBack) },
+                navigationIcon = { BackButton(onBack) },
                 title = { Text("Settings", fontWeight = FontWeight.SemiBold) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
@@ -436,7 +435,7 @@ private fun DeviceDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                navigationIcon = { OutlinedBackButton(onBack) },
+                navigationIcon = { BackButton(onBack) },
                 title = {
                     Column {
                         Text(device.name, fontWeight = FontWeight.SemiBold)
@@ -497,10 +496,10 @@ private fun DeviceDetailScreen(
 }
 
 @Composable
-private fun OutlinedBackButton(onClick: () -> Unit) {
+private fun BackButton(onClick: () -> Unit) {
     IconButton(
         onClick = onClick,
-        modifier = Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+        modifier = Modifier.size(48.dp),
     ) {
         Icon(
             painter = painterResource(R.drawable.ic_arrow_back),
