@@ -78,6 +78,8 @@ import com.jbd.bmsmonitor.model.BmsTelemetry
 import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.model.ServerUploadConfig
+import com.jbd.bmsmonitor.model.SettingsNote
+import com.jbd.bmsmonitor.model.settingsAdvice
 import com.jbd.bmsmonitor.network.ServerConnectionCheckResult
 import java.net.URI
 import java.text.DateFormat
@@ -618,26 +620,94 @@ private fun CellsTab(telemetry: BmsTelemetry) {
     }
 }
 
+private data class SettingRow(val label: String, val value: String?, val explanation: String? = null)
+
 @Composable
 private fun SettingsTab(settings: BmsSettings, liveCellCount: Int, connected: Boolean) {
+    val cellCount = settings.configuredCellCount ?: liveCellCount
+    fun packVoltage(value: Double?) = value?.let {
+        if (cellCount > 0) "${format(it, "V")} · ${format(it / cellCount, "V", 3)}/cell" else format(it, "V")
+    }
     val values = listOf(
-        "Hardware version" to settings.hardwareVersion,
-        "Configured cells" to (settings.configuredCellCount ?: liveCellCount.takeIf { it > 0 })?.toString(),
-        "Design capacity" to settings.designCapacityAh?.let { format(it, "Ah") },
-        "Cycle capacity" to settings.cycleCapacityAh?.let { format(it, "Ah") },
-        "Cell voltage at 100%" to settings.fullCellVoltageV?.let { format(it, "V", 3) },
-        "Cell voltage at 0%" to settings.emptyCellVoltageV?.let { format(it, "V", 3) },
-        "Cell overvoltage cutoff" to settings.cellOvervoltageV?.let { format(it, "V", 3) },
-        "Cell undervoltage cutoff" to settings.cellUndervoltageV?.let { format(it, "V", 3) },
-        "Pack overvoltage cutoff" to settings.packOvervoltageV?.let { format(it, "V") },
-        "Pack undervoltage cutoff" to settings.packUndervoltageV?.let { format(it, "V") },
-        "Balancing starts" to settings.balanceStartVoltageV?.let { format(it, "V", 3) },
-        "Balancing delta" to settings.balanceStartDeltaV?.let { "${(it * 1000).toInt()} mV" },
-        "Charge high temperature" to settings.chargeOverTemperatureC?.let { format(it, "°C") },
-        "Charge low temperature" to settings.chargeUnderTemperatureC?.let { format(it, "°C") },
-        "Discharge high temperature" to settings.dischargeOverTemperatureC?.let { format(it, "°C") },
-        "Discharge low temperature" to settings.dischargeUnderTemperatureC?.let { format(it, "°C") },
+        SettingRow("Hardware version", settings.hardwareVersion),
+        SettingRow(
+            "Configured cells",
+            cellCount.takeIf { it > 0 }?.toString(),
+            "Number of cells in series the BMS is set up for.",
+        ),
+        SettingRow(
+            "Design capacity",
+            settings.designCapacityAh?.let { format(it, "Ah") },
+            "The capacity the charge percentage is calculated against. Should match what the pack really holds.",
+        ),
+        SettingRow(
+            "Cycle capacity",
+            settings.cycleCapacityAh?.let { format(it, "Ah") },
+            "Only drives the cycle counter: one cycle is counted per this many Ah discharged. " +
+                "Doesn't affect the percentage. Usually 80% of design capacity.",
+        ),
+        SettingRow(
+            "Cell voltage at 100%",
+            settings.fullCellVoltageV?.let { format(it, "V", 3) },
+            "When cells reach this voltage, the BMS resets its charge count to 100%.",
+        ),
+        SettingRow(
+            "Cell voltage at 0%",
+            settings.emptyCellVoltageV?.let { format(it, "V", 3) },
+            "When cells drop to this voltage, the BMS resets its charge count to 0%.",
+        ),
+        SettingRow(
+            "Cell overvoltage cutoff",
+            settings.cellOvervoltageV?.let { format(it, "V", 3) },
+            "Charging stops when any cell rises above this.",
+        ),
+        SettingRow(
+            "Cell undervoltage cutoff",
+            settings.cellUndervoltageV?.let { format(it, "V", 3) },
+            "Discharging stops when any cell drops below this.",
+        ),
+        SettingRow(
+            "Pack overvoltage cutoff",
+            packVoltage(settings.packOvervoltageV),
+            "Charging stops when the total pack voltage rises above this.",
+        ),
+        SettingRow(
+            "Pack undervoltage cutoff",
+            packVoltage(settings.packUndervoltageV),
+            "Discharging stops when the total pack voltage drops below this.",
+        ),
+        SettingRow(
+            "Balancing starts",
+            settings.balanceStartVoltageV?.let { format(it, "V", 3) },
+            "Cells are only balanced above this voltage.",
+        ),
+        SettingRow(
+            "Balancing delta",
+            settings.balanceStartDeltaV?.let { "${(it * 1000).toInt()} mV" },
+            "Balancing starts when cells differ by more than this.",
+        ),
+        SettingRow(
+            "Charge high temperature",
+            settings.chargeOverTemperatureC?.let { format(it, "°C") },
+            "Charging stops above this temperature.",
+        ),
+        SettingRow(
+            "Charge low temperature",
+            settings.chargeUnderTemperatureC?.let { format(it, "°C") },
+            "Charging stops below this temperature.",
+        ),
+        SettingRow(
+            "Discharge high temperature",
+            settings.dischargeOverTemperatureC?.let { format(it, "°C") },
+            "Discharging stops above this temperature.",
+        ),
+        SettingRow(
+            "Discharge low temperature",
+            settings.dischargeUnderTemperatureC?.let { format(it, "°C") },
+            "Discharging stops below this temperature.",
+        ),
     )
+    val advice = if (settings.loaded) settingsAdvice(settings, cellCount) else emptyList()
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -669,7 +739,33 @@ private fun SettingsTab(settings: BmsSettings, liveCellCount: Int, connected: Bo
                 )
             }
         }
-        items(values) { (label, value) -> ValueRow(label, value ?: "—") }
+        items(advice) { AdviceCard(it) }
+        items(values) { SettingValueRow(it) }
+    }
+}
+
+@Composable
+private fun AdviceCard(note: SettingsNote) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(note.title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(note.body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+        }
+    }
+}
+
+@Composable
+private fun SettingValueRow(row: SettingRow) {
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(row.label, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(row.value ?: "—", fontWeight = FontWeight.SemiBold)
+            }
+            row.explanation?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
