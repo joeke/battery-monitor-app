@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class JbdBleRepository(private val context: Context) {
+    var onInitialReading: ((String) -> Unit)? = null
+
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter? get() = bluetoothManager?.adapter
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -144,6 +146,9 @@ class JbdBleRepository(private val context: Context) {
         connect(DiscoveredBms(address, state.name, state.rssi))
     }
 
+    fun hasCompleteReading(address: String): Boolean =
+        connections[address]?.initialReadingComplete == true
+
     fun close() {
         stopScan()
         connections.values.toList().forEach { it.close() }
@@ -187,6 +192,9 @@ class JbdBleRepository(private val context: Context) {
         private var defaultPasswordAttempted = false
         private var expectedRegister: Int? = null
         private var closed = false
+        private var basicInfoReceived = false
+        @Volatile var initialReadingComplete = false
+            private set
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
@@ -282,19 +290,31 @@ class JbdBleRepository(private val context: Context) {
                 Phase.INITIAL_BASIC, Phase.POLL_BASIC -> {
                     updateDevice(address) { current ->
                         JbdParser.parseBasicInfo(frame.payload, current.telemetry)
-                            ?.let { current.copy(telemetry = it, error = null) }
+                            ?.let {
+                                basicInfoReceived = true
+                                current.copy(telemetry = it, error = null)
+                            }
                             ?: current.copy(error = "Invalid basic-info frame")
                     }
                     phase = if (phase == Phase.INITIAL_BASIC) Phase.INITIAL_CELLS else Phase.POLL_CELLS
                     sendRead(JbdProtocol.CELL_INFO)
                 }
                 Phase.INITIAL_CELLS, Phase.POLL_CELLS -> {
+                    val initialReading = phase == Phase.INITIAL_CELLS
+                    var readingComplete = false
                     updateDevice(address) { current ->
                         JbdParser.parseCells(frame.payload, current.telemetry)
-                            ?.let { current.copy(telemetry = it, error = null) }
+                            ?.let {
+                                readingComplete = true
+                                current.copy(telemetry = it, error = null)
+                            }
                             ?: current.copy(error = "Invalid cell-voltage frame")
                     }
-                    if (phase == Phase.INITIAL_CELLS) {
+                    if (!initialReadingComplete && basicInfoReceived && readingComplete) {
+                        initialReadingComplete = true
+                        onInitialReading?.invoke(address)
+                    }
+                    if (initialReading) {
                         phase = Phase.HARDWARE
                         sendRead(JbdProtocol.HARDWARE_VERSION)
                     } else {

@@ -891,7 +891,7 @@ private fun ServerUploadCard(
                     )
                 }
                 Text(
-                    "While the app is open, each connected BMS uploads about once per minute.",
+                    "While the app is open, each connected BMS uploads on connection and about every 30 seconds.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

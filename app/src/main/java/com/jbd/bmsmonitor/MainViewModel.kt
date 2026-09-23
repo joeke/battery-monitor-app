@@ -7,6 +7,7 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jbd.bmsmonitor.ble.JbdBleRepository
+import com.jbd.bmsmonitor.model.BmsTelemetry
 import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.model.ServerUploadConfig
@@ -36,6 +37,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var connectionCheckJob: Job? = null
     private var appUpdateJob: Job? = null
     private val lastUploadAttemptAt = mutableMapOf<String, Long>()
+    private val lastUploadedReading = mutableMapOf<String, BmsTelemetry>()
+    private val pendingImmediateUploads = mutableSetOf<String>()
+
+    init {
+        repository.onInitialReading = { address ->
+            mainHandler.post {
+                if (appIsForegrounded && _serverUploadConfig.value.isConfigured) {
+                    val reading = repository.devices.value[address]?.telemetry
+                    if (reading != null && lastUploadedReading[address] !== reading) {
+                        pendingImmediateUploads += address
+                        requestUploadCheck()
+                    }
+                }
+            }
+        }
+    }
 
     private val _backgroundDisconnectSeconds = MutableStateFlow(loadBackgroundTimeoutSeconds())
     val backgroundDisconnectSeconds = _backgroundDisconnectSeconds.asStateFlow()
@@ -80,6 +97,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!enabled) {
             connectionCheckJob?.cancel()
             _serverConnectionCheck.value = ServerConnectionCheckState.Idle
+            pendingImmediateUploads.clear()
         }
         _serverUploadConfig.value = _serverUploadConfig.value.copy(enabled = enabled)
         preferences.edit().putBoolean(KEY_SERVER_UPLOAD_ENABLED, enabled).apply()
@@ -207,16 +225,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!config.isConfigured || uploadJob?.isActive == true) return
 
         val now = System.currentTimeMillis()
+        pendingImmediateUploads.retainAll(repository.devices.value.values
+            .filter { it.connectionStatus == ConnectionStatus.CONNECTED && repository.hasCompleteReading(it.address) }
+            .map { it.address }.toSet())
         val eligibleDevices = repository.devices.value.values.filter { device ->
             val lastAttempt = lastUploadAttemptAt[device.address] ?: 0L
             val lastSuccessfulUpload = preferences.getLong(lastUploadKey(device.address), 0L)
             device.connectionStatus == ConnectionStatus.CONNECTED &&
+                repository.hasCompleteReading(device.address) &&
                 device.telemetry.updatedAtMillis > 0L &&
-                now - maxOf(lastAttempt, lastSuccessfulUpload) >= UPLOAD_INTERVAL_MS
+                (device.address in pendingImmediateUploads ||
+                    now - maxOf(lastAttempt, lastSuccessfulUpload) >= UPLOAD_INTERVAL_MS)
         }
         if (eligibleDevices.isEmpty()) return
 
-        eligibleDevices.forEach { lastUploadAttemptAt[it.address] = now }
+        eligibleDevices.forEach {
+            lastUploadAttemptAt[it.address] = now
+            lastUploadedReading[it.address] = it.telemetry
+        }
+        pendingImmediateUploads.removeAll(eligibleDevices.map { it.address }.toSet())
         uploadJob = viewModelScope.launch(Dispatchers.IO) {
             eligibleDevices.forEach { device ->
                 if (batteryDataUploader.upload(config, device)) {
@@ -274,7 +301,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_SERVER_URL = "server_upload_url"
         private const val KEY_SERVER_API_KEY = "server_upload_api_key"
         private const val KEY_LAST_SERVER_UPLOAD_PREFIX = "server_last_upload_at_"
-        private const val UPLOAD_INTERVAL_MS = 60_000L
+        private const val UPLOAD_INTERVAL_MS = 30_000L
         private const val UPLOAD_CHECK_INTERVAL_MS = 5_000L
     }
 }

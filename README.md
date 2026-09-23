@@ -10,7 +10,7 @@ A small, native Android app for monitoring multiple JBD / Jiabaida / Xiaoxiang /
 - Keeps BLE connections alive while switching apps, then disconnects after a configurable background timeout (5 seconds to 30 minutes, or never; default 10 seconds).
 - Provides a dedicated app Settings screen, opened from the cogwheel in the main toolbar.
 - Checks `joeke.dev` for updates from Settings and can securely download and hand a newer APK to Android's system installer.
-- Optionally uploads each connected BMS reading about once per minute to a configured HTTPS endpoint, authenticated with a masked API key (`X-Api-Key`). Uploading is disabled by default and runs only while the app is in the foreground.
+- Optionally uploads each connected BMS reading after the first complete reading on connection and about every 30 seconds to a configured HTTPS endpoint, authenticated with a masked API key (`X-Api-Key`). Uploading is disabled by default and runs only while the app is in the foreground.
 - Shows state of charge, pack voltage, signed current, calculated power, remaining/full capacity, cycle count, and charge/discharge MOS state.
 - Shows every cell voltage, lowest/highest/average cell, balancing state, and pack cell delta.
 - Shows all reported NTC temperature sensors.
@@ -48,7 +48,7 @@ To publish a release, increment both `versionCode` and `versionName` in `app/bui
 
 ```shell
 ./gradlew testReleaseUnitTest assembleRelease
-cp app/build/outputs/apk/release/app-release.apk releases/Battery-Monitor-0.5.1.apk
+cp app/build/outputs/apk/release/app-release.apk releases/Battery-Monitor-0.5.2.apk
 ```
 
 Commit the source changes and APK, then push them to `main`. Adding the APK triggers the workflow; editing or deleting an existing APK does not publish anything. A manual workflow run republishes the highest versioned APK on the selected branch. GitHub Releases and tags are not required.
@@ -63,8 +63,8 @@ The manifest is a small static file, so the server does not need to expose a bro
 
 ```json
 {
-  "versionName": "0.5.1",
-  "apkUrl": "https://example.com/battery-monitor/Battery-Monitor-0.5.1.apk",
+  "versionName": "0.5.2",
+  "apkUrl": "https://example.com/battery-monitor/Battery-Monitor-0.5.2.apk",
   "releasePageUrl": "https://example.com/battery-monitor/"
 }
 ```
