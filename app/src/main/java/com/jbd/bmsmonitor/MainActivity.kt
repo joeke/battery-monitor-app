@@ -12,15 +12,21 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,18 +39,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -53,15 +61,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -91,6 +107,7 @@ class MainActivity : ComponentActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent { JbdTheme { JbdApp(mainViewModel) } }
     }
@@ -292,9 +309,11 @@ private fun DeviceListScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(stringResource(R.string.app_name), fontWeight = FontWeight.Bold)
-                    }
+                    Text(
+                        stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
                 },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
@@ -320,11 +339,18 @@ private fun DeviceListScreen(
                 }
             }
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    SectionTitle("Nearby devices")
-                    if (scanning) {
-                        Spacer(Modifier.width(10.dp))
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { SectionTitle("Nearby devices") }
+                    TextButton(onClick = onScan) {
+                        if (scanning) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Stop")
+                        } else {
+                            Icon(painterResource(R.drawable.ic_refresh), contentDescription = null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Scan")
+                        }
                     }
                 }
             }
@@ -352,41 +378,78 @@ private fun ConnectedDeviceCard(
     onDisconnect: (String) -> Unit,
     onReconnect: (String) -> Unit,
 ) {
+    val t = device.telemetry
+    val barColor = if (device.connectionStatus == ConnectionStatus.CONNECTED) {
+        LocalAccentColors.current.green
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
     Card(
         onClick = { onSelect(device.address) },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(1.dp),
     ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(device.connectionStatus)
-                Spacer(Modifier.width(10.dp))
+                StatusDot(device.connectionStatus, Modifier.size(12.dp))
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(device.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(statusLabel(device.connectionStatus), style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        statusLabel(device.connectionStatus),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                Text(
-                    if (device.connectionStatus == ConnectionStatus.DISCONNECTED) "Saved" else "${device.rssi} dBm",
-                    style = MaterialTheme.typography.labelMedium,
+                if (device.connectionStatus == ConnectionStatus.DISCONNECTED) {
+                    Text("Saved", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Icon(
+                        painterResource(R.drawable.ic_bluetooth),
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "${device.rssi} dBm",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    painterResource(R.drawable.ic_chevron_right),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (device.telemetry.updatedAtMillis > 0) {
-                LinearProgressIndicator(
-                    progress = { device.telemetry.stateOfChargePercent.coerceIn(0, 100) / 100f },
-                    modifier = Modifier.fillMaxWidth().height(8.dp),
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Metric("Charge", "${device.telemetry.stateOfChargePercent}%")
-                    Metric("Voltage", format(device.telemetry.packVoltageV, "V"))
-                    Metric("Power", format(device.telemetry.powerW, "W"))
+            if (t.updatedAtMillis > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ChargeBar(
+                        fraction = t.stateOfChargePercent.coerceIn(0, 100) / 100f,
+                        color = barColor,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.weight(1f).height(10.dp),
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        "${t.stateOfChargePercent}%",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = barColor,
+                    )
+                }
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                    Metric("Voltage", format(t.packVoltageV, "V"), Modifier.weight(1f))
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Metric("Current", signedFormat(t.currentA, "A"), Modifier.weight(1f).padding(start = 16.dp))
+                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Metric("Power", format(t.powerW, "W"), Modifier.weight(1f).padding(start = 16.dp))
                 }
             }
-            if (device.lastConnectedAtMillis > 0 || device.telemetry.updatedAtMillis > 0) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    if (device.lastConnectedAtMillis > 0) {
-                        TimestampText("Last connected", device.lastConnectedAtMillis)
-                    }
-                }
+            if (device.lastConnectedAtMillis > 0) {
+                TimestampText("Last connected", device.lastConnectedAtMillis)
             }
             device.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         }
@@ -397,9 +460,15 @@ private fun ConnectedDeviceCard(
 private fun DiscoveredDeviceCard(device: DiscoveredBms, onConnect: (DiscoveredBms) -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(R.drawable.ic_bluetooth, MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(device.name, fontWeight = FontWeight.SemiBold)
-                Text("${device.address} · ${device.rssi} dBm", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "${device.address} · ${device.rssi} dBm",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Button(onClick = { onConnect(device) }) { Text("Connect") }
         }
@@ -421,14 +490,38 @@ private fun DeviceDetailScreen(
                 navigationIcon = { BackButton(onBack) },
                 title = {
                     Column {
-                        Text(device.name, fontWeight = FontWeight.SemiBold)
-                        Text(statusLabel(device.connectionStatus), style = MaterialTheme.typography.labelMedium)
+                        Text(device.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StatusDot(device.connectionStatus)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                statusLabel(device.connectionStatus),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 },
             )
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            TabRow(
+                selectedTabIndex = tab,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
+                divider = { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant) },
+            ) {
+                listOf("Overview", "Cells", "Settings").forEachIndexed { index, label ->
+                    Tab(
+                        selected = tab == index,
+                        onClick = { tab = index },
+                        text = { Text(label, style = MaterialTheme.typography.titleSmall) },
+                        selectedContentColor = MaterialTheme.colorScheme.primary,
+                        unselectedContentColor = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
             if (device.connectionStatus == ConnectionStatus.DISCONNECTED) {
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -450,11 +543,6 @@ private fun DeviceDetailScreen(
                     }
                 }
             }
-            TabRow(selectedTabIndex = tab) {
-                listOf("Overview", "Cells", "Settings").forEachIndexed { index, label ->
-                    Tab(selected = tab == index, onClick = { tab = index }, text = { Text(label) })
-                }
-            }
             Box(Modifier.weight(1f)) {
                 when (tab) {
                     0 -> OverviewTab(device)
@@ -467,11 +555,20 @@ private fun DeviceDetailScreen(
                 }
             }
             if (device.connectionStatus != ConnectionStatus.DISCONNECTED) {
+                val accents = LocalAccentColors.current
                 OutlinedButton(
                     onClick = onDisconnect,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(48.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(56.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = accents.dangerContainer,
+                        contentColor = accents.danger,
+                    ),
+                    border = BorderStroke(1.dp, accents.danger.copy(alpha = 0.7f)),
                 ) {
-                    Text("Disconnect")
+                    Icon(painterResource(R.drawable.ic_power), contentDescription = null, Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("Disconnect", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -499,44 +596,30 @@ private fun OverviewTab(device: BmsDeviceState) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { StateOfChargeCard(t) }
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Text("State of charge", style = MaterialTheme.typography.labelLarge)
-                            Text("${t.stateOfChargePercent}%", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(activityLabel(t), style = MaterialTheme.typography.titleMedium)
-                            Text(format(t.powerW, "W"), style = MaterialTheme.typography.headlineSmall)
-                        }
-                    }
-                    LinearProgressIndicator(
-                        progress = { t.stateOfChargePercent.coerceIn(0, 100) / 100f },
-                        modifier = Modifier.fillMaxWidth().height(10.dp),
-                    )
-                }
+            val accents = LocalAccentColors.current
+            IconMetricGrid(
+                listOf(
+                    IconMetric("Voltage", format(t.packVoltageV, "V"), R.drawable.ic_battery, accents.green),
+                    IconMetric("Current", signedFormat(t.currentA, "A"), R.drawable.ic_swap, accents.blue),
+                    IconMetric("Power", signedFormat(t.powerW, "W"), R.drawable.ic_bolt, accents.orange),
+                    IconMetric("Cell delta", "${(t.cellDeltaV * 1000).toInt()} mV", R.drawable.ic_bar_chart, accents.violet),
+                    IconMetric("Remaining capacity", format(t.remainingCapacityAh, "Ah"), R.drawable.ic_pie_chart, accents.blue),
+                    IconMetric("Full capacity", format(t.fullCapacityAh, "Ah"), R.drawable.ic_pie_chart, accents.blue),
+                ),
+            )
+        }
+        item { SectionTitle("Status") }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SwitchStateTile("Charge MOS", t.chargeMosfetOn, Modifier.weight(1f))
+                SwitchStateTile("Discharge MOS", t.dischargeMosfetOn, Modifier.weight(1f))
             }
         }
         item {
             MetricGrid(
                 listOf(
-                    "Pack voltage" to format(t.packVoltageV, "V"),
-                    "Current" to signedFormat(t.currentA, "A"),
-                    "Power" to signedFormat(t.powerW, "W"),
-                    "Cell delta" to "${(t.cellDeltaV * 1000).toInt()} mV",
-                    "Remaining" to format(t.remainingCapacityAh, "Ah"),
-                    "Full capacity" to format(t.fullCapacityAh, "Ah"),
-                ),
-            )
-        }
-        item { SectionTitle("Switch state") }
-        item {
-            MetricGrid(
-                listOf(
-                    "Charge MOS" to if (t.chargeMosfetOn) "On" else "Off",
-                    "Discharge MOS" to if (t.dischargeMosfetOn) "On" else "Off",
                     "Cycles" to t.cycleCount.toString(),
                     "Cells" to t.cellCount.toString(),
                 ),
@@ -553,6 +636,123 @@ private fun OverviewTab(device: BmsDeviceState) {
         if (t.updatedAtMillis > 0) {
             item { ValueRow("Last updated", formatTimestamp(t.updatedAtMillis)) }
         }
+    }
+}
+
+@Composable
+private fun StateOfChargeCard(t: BmsTelemetry) {
+    val accents = LocalAccentColors.current
+    val activityColor = when {
+        t.currentA > 0.05 -> accents.green
+        t.currentA < -0.05 -> accents.orange
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(Brush.verticalGradient(accents.chargeCard))
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("State of charge", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${t.stateOfChargePercent}%",
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(painterResource(R.drawable.ic_bolt), contentDescription = null, Modifier.size(30.dp), tint = activityColor)
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text(activityLabel(t), style = MaterialTheme.typography.labelLarge, color = activityColor)
+                    Text(format(abs(t.powerW), "W"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        ChargeBar(
+            fraction = t.stateOfChargePercent.coerceIn(0, 100) / 100f,
+            color = accents.green,
+            trackColor = accents.chargeTrack,
+            modifier = Modifier.fillMaxWidth().height(14.dp),
+        )
+    }
+}
+
+private data class IconMetric(val label: String, val value: String, @DrawableRes val icon: Int, val accent: Color)
+
+@Composable
+private fun IconMetricGrid(values: List<IconMetric>) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        values.chunked(2).forEach { row ->
+            Row(
+                Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                row.forEach { metric ->
+                    Card(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    ) {
+                        Row(
+                            Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconBadge(metric.icon, metric.accent)
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    metric.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(metric.value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun IconBadge(@DrawableRes icon: Int, accent: Color) {
+    Box(
+        Modifier.size(44.dp).background(accent.copy(alpha = 0.14f), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(painterResource(icon), contentDescription = null, Modifier.size(24.dp), tint = accent)
+    }
+}
+
+@Composable
+private fun SwitchStateTile(label: String, on: Boolean, modifier: Modifier = Modifier) {
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(14.dp).background(
+                        if (on) LocalAccentColors.current.green else MaterialTheme.colorScheme.outline,
+                        CircleShape,
+                    ),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(if (on) "On" else "Off", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChargeBar(fraction: Float, color: Color, trackColor: Color, modifier: Modifier = Modifier) {
+    Box(modifier.clip(CircleShape).background(trackColor)) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).clip(CircleShape).background(color))
     }
 }
 
@@ -783,35 +983,45 @@ private fun ValueRow(label: String, value: String) {
 }
 
 @Composable
-private fun Metric(label: String, value: String) {
-    Column {
-        Text(label, style = MaterialTheme.typography.labelSmall)
-        Text(value, fontWeight = FontWeight.SemiBold)
+private fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
     }
 }
 
 @Composable
 private fun TimestampText(label: String, timestamp: Long) {
-    Text(
-        "$label: ${formatTimestamp(timestamp)}",
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            painterResource(R.drawable.ic_schedule),
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "$label: ${formatTimestamp(timestamp)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable
-private fun StatusDot(status: ConnectionStatus) {
+private fun StatusDot(status: ConnectionStatus, modifier: Modifier = Modifier.size(10.dp)) {
+    val accents = LocalAccentColors.current
     val color = when (status) {
-        ConnectionStatus.CONNECTED -> MaterialTheme.colorScheme.primary
-        ConnectionStatus.CONNECTING, ConnectionStatus.DISCOVERING -> Color(0xFFF0A020)
+        ConnectionStatus.CONNECTED -> accents.green
+        ConnectionStatus.CONNECTING, ConnectionStatus.DISCOVERING -> accents.warning
         ConnectionStatus.DISCONNECTED -> MaterialTheme.colorScheme.outline
     }
-    Box(Modifier.size(10.dp).background(color, CircleShape))
+    Box(modifier.background(color, CircleShape))
 }
 
 @Composable
 private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+    Text(text, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
 }
 
 @Composable
@@ -1050,10 +1260,34 @@ private fun BackgroundDisconnectCard(seconds: Int, onSecondsChange: (Int) -> Uni
 @Composable
 private fun EmptyCard(title: String, body: String, action: String, onAction: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Button(onClick = onAction) { Text(action) }
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(60.dp).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_bluetooth),
+                        contentDescription = null,
+                        modifier = Modifier.size(30.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(16.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                    Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Button(
+                onClick = onAction,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Icon(painterResource(R.drawable.ic_scan), contentDescription = null, Modifier.size(20.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(action, style = MaterialTheme.typography.titleSmall)
+            }
         }
     }
 }
@@ -1074,17 +1308,109 @@ private fun BlockingMessage(
     }
 }
 
+/** Colors from the design that have no Material color scheme slot. */
+@Immutable
+private data class AccentColors(
+    val green: Color,
+    val blue: Color,
+    val orange: Color,
+    val violet: Color,
+    val warning: Color,
+    val danger: Color,
+    val dangerContainer: Color,
+    val chargeCard: List<Color>,
+    val chargeTrack: Color,
+)
+
+private val LightAccents = AccentColors(
+    green = Color(0xFF1E9E5E),
+    blue = Color(0xFF3B82F6),
+    orange = Color(0xFFF59E0B),
+    violet = Color(0xFF3B6FE0),
+    warning = Color(0xFFF0A020),
+    danger = Color(0xFFD93A3A),
+    dangerContainer = Color(0xFFFDECEC),
+    chargeCard = listOf(Color(0xFFE6F6EE), Color(0xFFD6EFE3)),
+    chargeTrack = Color(0xFFC3E3D3),
+)
+
+private val DarkAccents = AccentColors(
+    green = Color(0xFF4ADE80),
+    blue = Color(0xFF60A5FA),
+    orange = Color(0xFFFBBF24),
+    violet = Color(0xFF8B7CF6),
+    warning = Color(0xFFF5B342),
+    danger = Color(0xFFFF6B6B),
+    dangerContainer = Color(0xFF3A1F1F),
+    chargeCard = listOf(Color(0xFF1B4535), Color(0xFF13291F)),
+    chargeTrack = Color(0xFF28503F),
+)
+
+private val LocalAccentColors = staticCompositionLocalOf { LightAccents }
+
+private val LightColors = lightColorScheme(
+    primary = Color(0xFF176B52),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFDDF3E8),
+    onPrimaryContainer = Color(0xFF0B3B2B),
+    secondary = Color(0xFF176B52),
+    secondaryContainer = Color(0xFFDDF3E8),
+    onSecondaryContainer = Color(0xFF0B3B2B),
+    tertiary = Color(0xFF496A9B),
+    background = Color(0xFFF4F6F4),
+    onBackground = Color(0xFF191C1A),
+    surface = Color.White,
+    onSurface = Color(0xFF191C1A),
+    surfaceVariant = Color(0xFFECF0ED),
+    onSurfaceVariant = Color(0xFF5E6560),
+    surfaceTint = Color(0xFF176B52),
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFF7F9F7),
+    surfaceContainer = Color(0xFFF1F4F2),
+    surfaceContainerHigh = Color(0xFFECEFED),
+    surfaceContainerHighest = Color(0xFFE6E9E7),
+    outline = Color(0xFF9AA19C),
+    outlineVariant = Color(0xFFE3E7E4),
+)
+
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFF4CD68A),
+    onPrimary = Color(0xFF00391F),
+    primaryContainer = Color(0xFF1B4535),
+    onPrimaryContainer = Color(0xFFD1F5E3),
+    secondary = Color(0xFF4CD68A),
+    secondaryContainer = Color(0xFF1B4535),
+    onSecondaryContainer = Color(0xFFD1F5E3),
+    tertiary = Color(0xFF9DB9E6),
+    background = Color(0xFF111311),
+    onBackground = Color(0xFFE7EAE7),
+    surface = Color(0xFF1C1F1D),
+    onSurface = Color(0xFFE7EAE7),
+    surfaceVariant = Color(0xFF2A2E2B),
+    onSurfaceVariant = Color(0xFFB4BAB5),
+    surfaceTint = Color(0xFF4CD68A),
+    surfaceContainerLowest = Color(0xFF0C0E0C),
+    surfaceContainerLow = Color(0xFF191C1A),
+    surfaceContainer = Color(0xFF1E211F),
+    surfaceContainerHigh = Color(0xFF262A27),
+    surfaceContainerHighest = Color(0xFF303431),
+    outline = Color(0xFF6B716C),
+    outlineVariant = Color(0xFF2E322F),
+    error = Color(0xFFFF8A80),
+    errorContainer = Color(0xFF4A1F1F),
+    onErrorContainer = Color(0xFFFFDAD6),
+)
+
 @Composable
-private fun JbdTheme(content: @Composable () -> Unit) {
-    val scheme = androidx.compose.material3.lightColorScheme(
-        primary = Color(0xFF176B52),
-        onPrimary = Color.White,
-        primaryContainer = Color(0xFFC8F2DF),
-        background = Color(0xFFF7F9F4),
-        surface = Color.White,
-        tertiary = Color(0xFF496A9B),
-    )
-    MaterialTheme(colorScheme = scheme, content = content)
+private fun JbdTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalAccentColors provides if (darkTheme) DarkAccents else LightAccents) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkColors else LightColors,
+            shapes = Shapes(medium = RoundedCornerShape(16.dp)),
+        ) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background, content = content)
+        }
+    }
 }
 
 private fun bluetoothPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
