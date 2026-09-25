@@ -85,6 +85,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -484,6 +485,7 @@ private fun DeviceDetailScreen(
     onReconnect: () -> Unit,
 ) {
     var tab by remember { mutableIntStateOf(0) }
+    val disconnect = onDisconnect.takeIf { device.connectionStatus != ConnectionStatus.DISCONNECTED }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -545,33 +547,36 @@ private fun DeviceDetailScreen(
             }
             Box(Modifier.weight(1f)) {
                 when (tab) {
-                    0 -> OverviewTab(device)
-                    1 -> CellsTab(device.telemetry)
+                    0 -> OverviewTab(device, disconnect)
+                    1 -> CellsTab(device.telemetry, disconnect)
                     else -> SettingsTab(
                         settings = device.settings,
                         liveCellCount = device.telemetry.cellCount,
                         connected = device.connectionStatus == ConnectionStatus.CONNECTED,
+                        onDisconnect = disconnect,
                     )
                 }
             }
-            if (device.connectionStatus != ConnectionStatus.DISCONNECTED) {
-                val accents = LocalAccentColors.current
-                OutlinedButton(
-                    onClick = onDisconnect,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(56.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = accents.dangerContainer,
-                        contentColor = accents.danger,
-                    ),
-                    border = BorderStroke(1.dp, accents.danger.copy(alpha = 0.7f)),
-                ) {
-                    Icon(painterResource(R.drawable.ic_power), contentDescription = null, Modifier.size(22.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text("Disconnect", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                }
-            }
         }
+    }
+}
+
+@Composable
+private fun DisconnectButton(onClick: () -> Unit) {
+    val accents = LocalAccentColors.current
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = accents.dangerContainer,
+            contentColor = accents.danger,
+        ),
+        border = BorderStroke(1.dp, accents.danger.copy(alpha = 0.7f)),
+    ) {
+        Icon(painterResource(R.drawable.ic_power), contentDescription = null, Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text("Disconnect", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -589,7 +594,7 @@ private fun BackButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun OverviewTab(device: BmsDeviceState) {
+private fun OverviewTab(device: BmsDeviceState, onDisconnect: (() -> Unit)?) {
     val t = device.telemetry
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -636,6 +641,7 @@ private fun OverviewTab(device: BmsDeviceState) {
         if (t.updatedAtMillis > 0) {
             item { ValueRow("Last updated", formatTimestamp(t.updatedAtMillis)) }
         }
+        onDisconnect?.let { item { DisconnectButton(it) } }
     }
 }
 
@@ -657,19 +663,19 @@ private fun StateOfChargeCard(t: BmsTelemetry) {
     ) {
         Row(Modifier.fillMaxWidth()) {
             Column(Modifier.weight(1f)) {
-                Text("State of charge", style = MaterialTheme.typography.titleMedium)
+                Text("State of charge", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "${t.stateOfChargePercent}%",
-                    style = MaterialTheme.typography.displayMedium,
+                    style = MaterialTheme.typography.displaySmall,
                     fontWeight = FontWeight.Bold,
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(R.drawable.ic_bolt), contentDescription = null, Modifier.size(30.dp), tint = activityColor)
+                Icon(painterResource(R.drawable.ic_bolt), contentDescription = null, Modifier.size(24.dp), tint = activityColor)
                 Spacer(Modifier.width(8.dp))
                 Column {
                     Text(activityLabel(t), style = MaterialTheme.typography.labelLarge, color = activityColor)
-                    Text(format(abs(t.powerW), "W"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    Text(format(abs(t.powerW), "W"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -698,18 +704,26 @@ private fun IconMetricGrid(values: List<IconMetric>) {
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     ) {
                         Row(
-                            Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 16.dp),
+                            Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             IconBadge(metric.icon, metric.accent)
-                            Spacer(Modifier.width(12.dp))
+                            Spacer(Modifier.width(10.dp))
                             Column {
                                 Text(
                                     metric.label,
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
-                                Text(metric.value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    metric.value,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
                             }
                         }
                     }
@@ -723,27 +737,27 @@ private fun IconMetricGrid(values: List<IconMetric>) {
 @Composable
 private fun IconBadge(@DrawableRes icon: Int, accent: Color) {
     Box(
-        Modifier.size(44.dp).background(accent.copy(alpha = 0.14f), CircleShape),
+        Modifier.size(36.dp).background(accent.copy(alpha = 0.14f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painterResource(icon), contentDescription = null, Modifier.size(24.dp), tint = accent)
+        Icon(painterResource(icon), contentDescription = null, Modifier.size(20.dp), tint = accent)
     }
 }
 
 @Composable
 private fun SwitchStateTile(label: String, on: Boolean, modifier: Modifier = Modifier) {
     Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(14.dp).background(
+                    Modifier.size(12.dp).background(
                         if (on) LocalAccentColors.current.green else MaterialTheme.colorScheme.outline,
                         CircleShape,
                     ),
                 )
-                Spacer(Modifier.width(12.dp))
-                Text(if (on) "On" else "Off", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.width(10.dp))
+                Text(if (on) "On" else "Off", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -757,7 +771,7 @@ private fun ChargeBar(fraction: Float, color: Color, trackColor: Color, modifier
 }
 
 @Composable
-private fun CellsTab(telemetry: BmsTelemetry) {
+private fun CellsTab(telemetry: BmsTelemetry, onDisconnect: (() -> Unit)?) {
     val cells = telemetry.cellVoltagesV
     val min = cells.minOrNull()
     val max = cells.maxOrNull()
@@ -798,13 +812,19 @@ private fun CellsTab(telemetry: BmsTelemetry) {
                 }
             }
         }
+        onDisconnect?.let { item { DisconnectButton(it) } }
     }
 }
 
 private data class SettingRow(val label: String, val value: String?, val explanation: String? = null)
 
 @Composable
-private fun SettingsTab(settings: BmsSettings, liveCellCount: Int, connected: Boolean) {
+private fun SettingsTab(
+    settings: BmsSettings,
+    liveCellCount: Int,
+    connected: Boolean,
+    onDisconnect: (() -> Unit)?,
+) {
     val cellCount = settings.configuredCellCount ?: liveCellCount
     fun packVoltage(value: Double?) = value?.let {
         if (cellCount > 0) "${format(it, "V")} · ${format(it / cellCount, "V", 3)}/cell" else format(it, "V")
@@ -922,6 +942,7 @@ private fun SettingsTab(settings: BmsSettings, liveCellCount: Int, connected: Bo
         }
         items(advice) { AdviceCard(it) }
         items(values) { SettingValueRow(it) }
+        onDisconnect?.let { item { DisconnectButton(it) } }
     }
 }
 
