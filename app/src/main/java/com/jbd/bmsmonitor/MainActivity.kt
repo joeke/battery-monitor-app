@@ -153,6 +153,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val devices by viewModel.devices.collectAsStateWithLifecycle()
     val scanning by viewModel.scanning.collectAsStateWithLifecycle()
     val backgroundDisconnectSeconds by viewModel.backgroundDisconnectSeconds.collectAsStateWithLifecycle()
+    val backgroundUploadEnabled by viewModel.backgroundUploadEnabled.collectAsStateWithLifecycle()
     val serverUploadConfig by viewModel.serverUploadConfig.collectAsStateWithLifecycle()
     val serverConnectionCheck by viewModel.serverConnectionCheck.collectAsStateWithLifecycle()
     val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
@@ -185,6 +186,8 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
         showAppSettings -> AppSettingsScreen(
             backgroundDisconnectSeconds = backgroundDisconnectSeconds,
             onBackgroundDisconnectSecondsChange = viewModel::setBackgroundDisconnectSeconds,
+            backgroundUploadEnabled = backgroundUploadEnabled,
+            onBackgroundUploadEnabledChange = viewModel::setBackgroundUploadEnabled,
             serverUploadConfig = serverUploadConfig,
             serverConnectionCheck = serverConnectionCheck,
             onServerUploadEnabledChange = viewModel::setServerUploadEnabled,
@@ -232,6 +235,8 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
 private fun AppSettingsScreen(
     backgroundDisconnectSeconds: Int,
     onBackgroundDisconnectSecondsChange: (Int) -> Unit,
+    backgroundUploadEnabled: Boolean,
+    onBackgroundUploadEnabledChange: (Boolean) -> Unit,
     serverUploadConfig: ServerUploadConfig,
     serverConnectionCheck: MainViewModel.ServerConnectionCheckState,
     onServerUploadEnabledChange: (Boolean) -> Unit,
@@ -268,6 +273,8 @@ private fun AppSettingsScreen(
             }
             item {
                 ServerUploadCard(
+                    backgroundUploadEnabled = backgroundUploadEnabled,
+                    onBackgroundUploadEnabledChange = onBackgroundUploadEnabledChange,
                     config = serverUploadConfig,
                     connectionCheck = serverConnectionCheck,
                     onEnabledChange = onServerUploadEnabledChange,
@@ -1113,6 +1120,8 @@ private fun AppUpdateCard(
 
 @Composable
 private fun ServerUploadCard(
+    backgroundUploadEnabled: Boolean,
+    onBackgroundUploadEnabledChange: (Boolean) -> Unit,
     config: ServerUploadConfig,
     connectionCheck: MainViewModel.ServerConnectionCheckState,
     onEnabledChange: (Boolean) -> Unit,
@@ -1144,6 +1153,26 @@ private fun ServerUploadCard(
             }
 
             if (config.enabled) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Background uploads", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "About every 30 minutes on this Android device",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(checked = backgroundUploadEnabled, onCheckedChange = onBackgroundUploadEnabledChange)
+                }
+                if (backgroundUploadEnabled) {
+                    Text(
+                        "With a saved server configuration, leaving the app disconnects immediately, " +
+                            "overriding Background disconnect. While in the background, it briefly reconnects " +
+                            "to each saved BMS, uploads a fresh reading, and disconnects. " +
+                            "Busy or unreachable BMSes are skipped. Android battery saving can delay uploads.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 OutlinedTextField(
                     value = serverUrl,
                     onValueChange = {

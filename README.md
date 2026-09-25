@@ -10,7 +10,7 @@ A small, native Android app for monitoring multiple JBD / Jiabaida / Xiaoxiang /
 - Keeps BLE connections alive while switching apps, then disconnects after a configurable background timeout (5 seconds to 30 minutes, or never; default 10 seconds).
 - Provides a dedicated app Settings screen, opened from the cogwheel in the main toolbar.
 - Checks `joeke.dev` for updates from Settings and can securely download and hand a newer APK to Android's system installer.
-- Optionally uploads each connected BMS reading after the first complete reading on connection and about every 30 seconds to a configured HTTPS endpoint, authenticated with a masked API key (`X-Api-Key`). Uploading is disabled by default and runs only while the app is in the foreground.
+- Optionally uploads each connected BMS reading after the first complete reading on connection and about every 30 seconds to a configured HTTPS endpoint, authenticated with a masked API key (`X-Api-Key`). Uploading is disabled by default. Optional background uploads reconnect to saved BMSes about every 30 minutes.
 - Shows state of charge, pack voltage, signed current, calculated power, remaining/full capacity, cycle count, and charge/discharge MOS state.
 - Shows every cell voltage, lowest/highest/average cell, balancing state, and pack cell delta.
 - Shows all reported NTC temperature sensors.
@@ -28,6 +28,18 @@ Open the project in Android Studio (JDK 17) and run the `app` configuration on a
 ```
 
 On Android 12+, grant the Nearby devices permission. On Android 8–11, Android requires location permission for BLE scanning. The app does not derive or store location.
+
+## Background uploads
+
+In Settings, enable **Store data on server**, save the HTTPS URL and API key, then enable **Background uploads** on each Android device that should participate. Connect to each BMS once to save it first.
+
+With background uploads enabled and the server configured, leaving the app disconnects immediately (overriding the Background disconnect timeout). WorkManager attempts an upload cycle about every 30 minutes when a network is available. Each cycle visits saved, previously connected BMSes in random order, reads fresh basic telemetry and cell voltages, releases Bluetooth, and uploads the snapshot. It does not read configuration registers. A busy/unreachable BMS has a 45-second connection/read limit; a whole cycle has a four-minute limit. Failed attempts are skipped until the next period. Small random delays reduce collisions between Android devices; they do not coordinate ownership across devices.
+
+Opening the app releases any background connection immediately. Turning off background uploads or server uploads cancels the scheduled work. Background uploads default to off independently on each installation.
+
+Android may delay work during Doze, battery saving, or manufacturer background restrictions, so this is not an exact 30-minute timer. Force-stopping the app prevents jobs until it is opened again. Bluetooth and its permission must remain enabled; out-of-range or already occupied BMSes cannot be read. Multiple phones can still upload the same BMS at different times using their existing sender identifiers.
+
+Device validation: enable the option with two saved BMSes, leave the app, and check the server for fresh readings from each sender after a scheduled cycle. Repeat with one BMS occupied or out of range, Bluetooth off, and by opening the app during a background read. Confirm connections are released after success, timeout, cancellation, and returning to the foreground. JVM tests cover the background telemetry-only protocol sequence; radio and OS scheduling behavior need real devices.
 
 ## App updates
 
@@ -75,7 +87,7 @@ Before offering the APK to Android, the app verifies that its package name is `c
 
 - Most JBD modules allow only one central connection. Fully close other BMS apps before connecting.
 - Some clones do not expose the standard `FF00/FF01/FF02` service or password-protect factory mode. Live telemetry will still work when configuration access is unavailable.
-- Polling and connections run while the app process is active. A persistent foreground monitoring service is intentionally outside this first version.
+- Foreground monitoring runs while the app process is active. Optional background uploads use WorkManager for short BLE sessions, including after process restart or reboot.
 - Closing the app releases all GATT connections; saved devices and snapshots remain available offline.
 
 ## Protocol references

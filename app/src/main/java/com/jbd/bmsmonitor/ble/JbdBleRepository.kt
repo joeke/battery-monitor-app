@@ -102,7 +102,7 @@ class JbdBleRepository(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun connect(device: DiscoveredBms) {
+    fun connect(device: DiscoveredBms, readSettings: Boolean = true) {
         if (!hasConnectPermission()) return
         stopScan()
         connections.remove(device.address)?.close()
@@ -117,7 +117,7 @@ class JbdBleRepository(private val context: Context) {
             error = null,
         )
         _devices.value = _devices.value + (device.address to initial)
-        val connection = BmsConnection(initial)
+        val connection = BmsConnection(initial, readSettings)
         connections[device.address] = connection
         val gatt = adapter?.getRemoteDevice(device.address)
             ?.connectGatt(context, false, connection, BluetoothDeviceTransport.LE)
@@ -180,7 +180,7 @@ class JbdBleRepository(private val context: Context) {
         context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
 
     @SuppressLint("MissingPermission")
-    private inner class BmsConnection(initial: BmsDeviceState) : BluetoothGattCallback() {
+    private inner class BmsConnection(initial: BmsDeviceState, readSettings: Boolean) : BluetoothGattCallback() {
         lateinit var gatt: BluetoothGatt
         private val address = initial.address
         private val assembler = JbdFrameAssembler()
@@ -189,6 +189,7 @@ class JbdBleRepository(private val context: Context) {
         private var requestId = 0L
         @Volatile private var closed = false
         private val session = JbdReadSession(
+            readSettings = readSettings,
             updateDevice = { transform -> updateDevice(address, transform) },
             onInitialReading = { onInitialReading?.invoke(address) },
             dispatch = { value, register, delay ->
@@ -200,6 +201,7 @@ class JbdBleRepository(private val context: Context) {
         val initialReadingComplete get() = session.initialReadingComplete
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (closed) return
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     updateDevice(address) {
@@ -224,6 +226,7 @@ class JbdBleRepository(private val context: Context) {
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (closed) return
             val service: BluetoothGattService? = gatt.getService(JbdProtocol.SERVICE_UUID)
             val notify = service?.getCharacteristic(JbdProtocol.NOTIFY_UUID)
             writeCharacteristic = service?.getCharacteristic(JbdProtocol.WRITE_UUID)
@@ -248,6 +251,7 @@ class JbdBleRepository(private val context: Context) {
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (closed) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("Could not enable JBD notifications (status $status)")
                 return
@@ -333,8 +337,13 @@ class JbdBleRepository(private val context: Context) {
             closed = true
             mainHandler.removeCallbacksAndMessages(this)
             if (::gatt.isInitialized) {
-                gatt.disconnect()
-                gatt.close()
+                try {
+                    gatt.disconnect()
+                } catch (_: SecurityException) {
+                    // Bluetooth access may have been revoked during a background read.
+                } finally {
+                    gatt.close()
+                }
             }
         }
     }

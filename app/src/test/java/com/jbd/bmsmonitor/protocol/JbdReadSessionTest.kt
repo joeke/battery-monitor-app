@@ -168,13 +168,58 @@ class JbdReadSessionTest {
         assertEquals(JbdProtocol.BASIC_INFO, device.register)
     }
 
-    private class Device {
+    @Test
+    fun `background reading requires fresh telemetry and never enters settings mode`() {
+        val device = Device(readSettings = false)
+        device.state = device.state.copy(settings = device.state.settings.copy(loaded = true))
+        device.session.start()
+        assertTrue(device.state.settings.loaded)
+        assertFalse(device.session.initialReadingComplete)
+        device.reply(payload = basicInfo)
+        assertFalse(device.session.initialReadingComplete)
+        device.reply(payload = hex("0C E4"))
+        assertTrue(device.session.initialReadingComplete)
+        assertEquals(1, device.initialReadings)
+        assertEquals(JbdProtocol.BASIC_INFO, device.register)
+        assertEquals(2_000L, device.delay)
+    }
+
+    @Test
+    fun `background timeouts retry telemetry without configuration commands`() {
+        val device = Device(readSettings = false)
+        device.session.start()
+        repeat(20) {
+            assertTrue(device.register == JbdProtocol.BASIC_INFO || device.register == JbdProtocol.CELL_INFO)
+            device.session.onRequestTimeout()
+        }
+        assertFalse(device.session.initialReadingComplete)
+        assertEquals(0, device.initialReadings)
+    }
+
+    @Test
+    fun `background malformed and rejected readings are not complete`() {
+        val device = Device(readSettings = false)
+        device.session.start()
+        device.reply(status = 0x80)
+        device.reply(payload = hex("0C E4"))
+        assertFalse(device.session.initialReadingComplete)
+        assertEquals(JbdProtocol.BASIC_INFO, device.register)
+        device.reply(payload = basicInfo)
+        device.reply(payload = byteArrayOf())
+        assertFalse(device.session.initialReadingComplete)
+        device.reply(payload = basicInfo)
+        device.reply(payload = hex("0C E4"))
+        assertTrue(device.session.initialReadingComplete)
+    }
+
+    private class Device(readSettings: Boolean = true) {
         var state = BmsDeviceState("test", "Battery", 0)
         var command = byteArrayOf()
         var register = -1
         var delay = 0L
         var initialReadings = 0
         val session = JbdReadSession(
+            readSettings = readSettings,
             updateDevice = { state = it(state) },
             onInitialReading = { initialReadings++ },
             dispatch = { bytes, responseRegister, delayMillis ->

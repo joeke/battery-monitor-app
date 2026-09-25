@@ -7,6 +7,7 @@ class JbdReadSession(
     private val updateDevice: ((BmsDeviceState) -> BmsDeviceState) -> Unit,
     private val onInitialReading: () -> Unit,
     private val dispatch: (ByteArray, Int, Long) -> Unit,
+    private val readSettings: Boolean = true,
 ) {
     private var phase = Phase.STARTING
     private var settingsIndex = 0
@@ -19,7 +20,7 @@ class JbdReadSession(
         private set
 
     fun start() {
-        updateDevice { it.copy(settings = it.settings.copy(loaded = false, unavailableReason = null)) }
+        if (readSettings) updateDevice { it.copy(settings = it.settings.copy(loaded = false, unavailableReason = null)) }
         phase = Phase.INITIAL_BASIC
         sendRead(JbdProtocol.BASIC_INFO)
     }
@@ -58,7 +59,7 @@ class JbdReadSession(
                     initialReadingComplete = true
                     onInitialReading()
                 }
-                if (initialReading) {
+                if (initialReading && readSettings) {
                     phase = Phase.HARDWARE
                     sendRead(JbdProtocol.HARDWARE_VERSION)
                 } else {
@@ -200,9 +201,11 @@ class JbdReadSession(
         if (phase == Phase.INITIAL_BASIC) {
             phase = Phase.INITIAL_CELLS
             sendRead(JbdProtocol.CELL_INFO)
-        } else {
+        } else if (readSettings) {
             phase = Phase.HARDWARE
             sendRead(JbdProtocol.HARDWARE_VERSION)
+        } else {
+            scheduleNextPoll()
         }
     }
 
