@@ -3,11 +3,12 @@ package com.jbd.bmsmonitor
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jbd.bmsmonitor.background.BackgroundUpload
+import com.jbd.bmsmonitor.background.BackgroundDisconnect
 import com.jbd.bmsmonitor.background.BatteryMonitorApplication
+import com.jbd.bmsmonitor.model.BackgroundUploadInterval
 import com.jbd.bmsmonitor.model.BmsTelemetry
 import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
@@ -33,7 +34,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val batteryDataUploader = BatteryDataUploader(application)
     private val appUpdateManager = AppUpdateManager(application)
-    private var backgroundedAtRealtime: Long? = null
     private var appIsForegrounded = false
     private var uploadJob: Job? = null
     private var connectionCheckJob: Job? = null
@@ -60,12 +60,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val backgroundDisconnectSeconds = _backgroundDisconnectSeconds.asStateFlow()
     private val _backgroundUploadEnabled = MutableStateFlow(preferences.getBoolean(BackgroundUpload.ENABLED, false))
     val backgroundUploadEnabled = _backgroundUploadEnabled.asStateFlow()
+    private val _backgroundUploadInterval = MutableStateFlow(BackgroundUpload.interval(app))
+    val backgroundUploadInterval = _backgroundUploadInterval.asStateFlow()
+
+    fun setBackgroundUploadInterval(interval: BackgroundUploadInterval) {
+        if (_backgroundUploadInterval.value == interval) return
+        _backgroundUploadInterval.value = interval
+        preferences.edit().putInt(BackgroundUpload.INTERVAL_SECONDS, interval.seconds).apply()
+        BackgroundUpload.schedule(app, restart = true)
+    }
 
     fun setBackgroundUploadEnabled(enabled: Boolean) {
         _backgroundUploadEnabled.value = enabled
         preferences.edit().putBoolean(BackgroundUpload.ENABLED, enabled).apply()
         if (!enabled) app.backgroundConnections.stop()
-        BackgroundUpload.schedule(app)
+        BackgroundUpload.schedule(app, restart = true)
     }
 
     private val _serverUploadConfig = MutableStateFlow(
@@ -113,7 +122,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _serverUploadConfig.value = _serverUploadConfig.value.copy(enabled = enabled)
         preferences.edit().putBoolean(KEY_SERVER_UPLOAD_ENABLED, enabled).apply()
         if (!enabled) app.backgroundConnections.stop()
-        BackgroundUpload.schedule(app)
+        BackgroundUpload.schedule(app, restart = true)
         requestUploadCheck()
     }
 
@@ -128,7 +137,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString(KEY_SERVER_URL, normalizedUrl)
             .putString(KEY_SERVER_API_KEY, normalizedApiKey)
             .apply()
-        BackgroundUpload.schedule(app)
+        BackgroundUpload.schedule(app, restart = true)
         checkServerConnection(normalizedUrl, normalizedApiKey)
         requestUploadCheck()
     }
@@ -190,42 +199,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appIsForegrounded = false
         app.backgroundConnections.setForeground(false)
         mainHandler.removeCallbacks(uploadCheck)
-        mainHandler.removeCallbacks(disconnectAfterBackgroundTimeout)
         repository.stopScan()
-        if (BackgroundUpload.enabled(app)) {
-            backgroundedAtRealtime = null
-            repository.disconnectAll()
-            return
-        }
         val seconds = _backgroundDisconnectSeconds.value
-        if (seconds == NEVER_DISCONNECT) {
-            backgroundedAtRealtime = null
-            return
-        }
-        backgroundedAtRealtime = SystemClock.elapsedRealtime()
-        mainHandler.postDelayed(disconnectAfterBackgroundTimeout, seconds * 1_000L)
+        BackgroundUpload.beginBackground(app, seconds)
+        app.backgroundDisconnect.backgrounded(seconds)
     }
 
     fun onAppForegrounded() {
         app.backgroundConnections.setForeground(true)
         appIsForegrounded = true
+        BackgroundUpload.endBackground(app)
+        app.backgroundDisconnect.foregrounded()
         requestUploadCheck()
-        val backgroundedAt = backgroundedAtRealtime
-        val timeoutSeconds = _backgroundDisconnectSeconds.value
-        mainHandler.removeCallbacks(disconnectAfterBackgroundTimeout)
-        backgroundedAtRealtime = null
-        if (
-            backgroundedAt != null &&
-            timeoutSeconds != NEVER_DISCONNECT &&
-            SystemClock.elapsedRealtime() - backgroundedAt >= timeoutSeconds * 1_000L
-        ) {
-            repository.disconnectAll()
-        }
-    }
-
-    private val disconnectAfterBackgroundTimeout = Runnable {
-        backgroundedAtRealtime = null
-        repository.disconnectAll()
     }
 
     private val uploadCheck = object : Runnable {
@@ -285,16 +270,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 preferences.getInt(LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES, 5) * 60
             else -> DEFAULT_BACKGROUND_TIMEOUT_SECONDS
         }
-        return stored.takeIf { it in BACKGROUND_TIMEOUT_OPTIONS_SECONDS }
-            ?: DEFAULT_BACKGROUND_TIMEOUT_SECONDS
+        val seconds = BackgroundDisconnect.normalizeSeconds(stored)
+        preferences.edit().putInt(KEY_BACKGROUND_TIMEOUT_SECONDS, seconds)
+            .remove(LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES).apply()
+        return seconds
     }
 
     override fun onCleared() {
         appIsForegrounded = false
         mainHandler.removeCallbacks(uploadCheck)
-        mainHandler.removeCallbacks(disconnectAfterBackgroundTimeout)
         repository.onInitialReading = null
-        if (!BackgroundUpload.enabled(app)) repository.disconnectAll()
     }
 
     sealed interface ServerConnectionCheckState {
@@ -314,9 +299,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
-        val BACKGROUND_TIMEOUT_OPTIONS_SECONDS = listOf(5, 10, 30, 60, 300, 1_800, NEVER_DISCONNECT)
-        const val NEVER_DISCONNECT = 0
-        private const val DEFAULT_BACKGROUND_TIMEOUT_SECONDS = 10
+        val BACKGROUND_TIMEOUT_OPTIONS_SECONDS = BackgroundDisconnect.OPTIONS_SECONDS
+        private const val DEFAULT_BACKGROUND_TIMEOUT_SECONDS = BackgroundDisconnect.DEFAULT_SECONDS
         private const val APP_PREFERENCES = BackgroundUpload.PREFERENCES
         private const val KEY_BACKGROUND_TIMEOUT_SECONDS = "background_disconnect_seconds"
         private const val LEGACY_KEY_BACKGROUND_TIMEOUT_MINUTES = "background_disconnect_minutes"

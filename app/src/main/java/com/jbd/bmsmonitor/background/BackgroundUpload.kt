@@ -5,29 +5,51 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.Operation
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.await
+import androidx.work.workDataOf
 import com.jbd.bmsmonitor.ble.JbdBleRepository
+import com.jbd.bmsmonitor.model.BackgroundUploadInterval
 import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.model.ServerUploadConfig
 import com.jbd.bmsmonitor.network.BatteryDataUploader
+import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** One repository for both the UI and workers, so connections and saved snapshots cannot compete. */
 class BatteryMonitorApplication : Application() {
     val repository by lazy { JbdBleRepository(this) }
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+    val backgroundDisconnect by lazy {
+        BackgroundDisconnect(
+            elapsedRealtime = SystemClock::elapsedRealtime,
+            scheduleTimeout = { timeout, delay -> mainHandler.postDelayed(timeout, delay); Unit },
+            cancelTimeout = { mainHandler.removeCallbacks(it) },
+            disconnectDevices = repository::disconnectAll,
+            onDisconnectedInBackground = { BackgroundUpload.afterDisconnect(this) },
+        )
+    }
     val backgroundConnections by lazy {
         BackgroundConnections(
             hasActiveConnections = {
@@ -47,11 +69,22 @@ class BatteryMonitorApplication : Application() {
 object BackgroundUpload {
     const val PREFERENCES = "app_preferences"
     const val ENABLED = "background_upload_enabled"
+    const val INTERVAL_SECONDS = "background_upload_interval_seconds"
+    internal const val GENERATION = "background_upload_generation"
+    private const val DISCONNECT_AT = "background_disconnect_at_millis"
     const val SERVER_ENABLED = "server_upload_enabled"
     const val SERVER_URL = "server_upload_url"
     const val SERVER_API_KEY = "server_upload_api_key"
     const val LAST_UPLOAD_PREFIX = "server_last_upload_at_"
-    private const val WORK_NAME = "background_bms_upload"
+    private const val LEGACY_WORK_NAME = "background_bms_upload"
+    private const val WORK_NAME = "background_bms_upload_cycles"
+
+    fun interval(context: Context): BackgroundUploadInterval {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        return BackgroundUploadInterval.fromSeconds(
+            preferences.getInt(INTERVAL_SECONDS, BackgroundUploadInterval.DEFAULT.seconds),
+        )
+    }
 
     fun config(context: Context): ServerUploadConfig {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -66,34 +99,111 @@ object BackgroundUpload {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getBoolean(ENABLED, false) &&
             config(context).isConfigured
 
-    fun schedule(context: Context) {
+    fun beginBackground(context: Context, disconnectSeconds: Int) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+            .putLong(DISCONNECT_AT, System.currentTimeMillis() + disconnectSeconds * 1_000L).apply()
+        // Persist the whole delay now, so Android can resume uploads even if the process dies during the countdown.
+        schedule(context, restart = true)
+    }
+
+    fun afterDisconnect(context: Context) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+            .putLong(DISCONNECT_AT, System.currentTimeMillis()).apply()
+        schedule(context, restart = true)
+    }
+
+    fun endBackground(context: Context) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().remove(DISCONNECT_AT).apply()
+        schedule(context)
+    }
+
+    @Synchronized
+    fun schedule(context: Context, restart: Boolean = false) {
         val manager = WorkManager.getInstance(context)
-        if (!enabled(context)) {
+        // Migrate installations that still have the old 30-minute periodic request.
+        manager.cancelUniqueWork(LEGACY_WORK_NAME)
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (!enabled(context) || !preferences.contains(DISCONNECT_AT)) {
+            preferences.edit().remove(GENERATION).apply()
             manager.cancelUniqueWork(WORK_NAME)
             return
         }
-        val request = PeriodicWorkRequestBuilder<BackgroundUploadWorker>(30, TimeUnit.MINUTES)
-            // Stagger installations to reduce contention when several phones share a BMS.
-            .setInitialDelay(30 * 60 + Random.nextLong(0, 121), TimeUnit.SECONDS)
+        val generation = if (restart) null else preferences.getString(GENERATION, null)
+        val currentGeneration = generation ?: UUID.randomUUID().toString().also {
+            preferences.edit().putString(GENERATION, it).apply()
+        }
+        manager.enqueueUniqueWork(
+            WORK_NAME,
+            if (restart) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+            request(context, currentGeneration),
+        )
+    }
+
+    fun isCurrent(context: Context, generation: String?): Boolean =
+        generation != null && enabled(context) &&
+            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).contains(DISCONNECT_AT) &&
+            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+                .getString(GENERATION, null) == generation
+
+    @Synchronized
+    internal fun scheduleNext(context: Context, generation: String): Operation? {
+        // A cancelled/replaced cycle must not append work to the new schedule.
+        if (!isCurrent(context, generation)) return null
+        return WorkManager.getInstance(context).enqueueUniqueWork(
+            WORK_NAME,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            request(context, generation),
+        )
+    }
+
+    private fun request(context: Context, generation: String): OneTimeWorkRequest {
+        val seconds = interval(context).seconds
+        val remainingDisconnectMillis = (
+            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getLong(DISCONNECT_AT, 0L) -
+                System.currentTimeMillis()
+            ).coerceAtLeast(0L)
+        return OneTimeWorkRequestBuilder<BackgroundUploadWorker>()
+            // Periodic work clamps intervals to 15 minutes; delayed one-time cycles support all options.
+            // Keep jitter small relative to the selected interval, especially for 30 seconds.
+            .setInitialDelay(
+                remainingDisconnectMillis +
+                    (seconds + Random.nextLong(0, minOf(30, seconds / 10) + 1L)) * 1_000L,
+                TimeUnit.MILLISECONDS,
+            )
+            .setInputData(workDataOf(GENERATION to generation))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
-        manager.enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.KEEP, request)
     }
 }
 
 class BackgroundUploadWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result = withContext(Dispatchers.Main.immediate) {
         val app = applicationContext as BatteryMonitorApplication
-        if (!BackgroundUpload.enabled(app) || app.backgroundConnections.foreground) return@withContext Result.success()
+        val generation = inputData.getString(BackgroundUpload.GENERATION) ?: return@withContext Result.success()
+        // A suspended process may have missed its Handler timeout. Finish that disconnect first.
+        if (!app.backgroundConnections.foreground) app.backgroundDisconnect.disconnectIfDue()
+        if (!BackgroundUpload.isCurrent(app, generation)) return@withContext Result.success()
+        try {
+            uploadOnce(app)
+            coroutineContext.ensureActive()
+            if (!isStopped) BackgroundUpload.scheduleNext(app, generation)?.await()
+            Result.success()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Keep the schedule alive after a transient failure; WorkManager applies retry backoff.
+            Result.retry()
+        }
+    }
+
+    private suspend fun uploadOnce(app: BatteryMonitorApplication) {
+        if (!BackgroundUpload.enabled(app) || app.backgroundConnections.foreground) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             app.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-        ) return@withContext Result.success()
+        ) return
         val repository = app.repository
-        if (!runCatching { repository.bluetoothEnabled }.getOrDefault(false)) return@withContext Result.success()
-        // Also stagger later runs if Android batches several devices' jobs at the same time.
-        delay(Random.nextLong(0, 30_001))
-        if (!BackgroundUpload.enabled(app)) return@withContext Result.success()
-        val session = app.backgroundConnections.begin() ?: return@withContext Result.success()
+        if (!runCatching { repository.bluetoothEnabled }.getOrDefault(false)) return
+        val session = app.backgroundConnections.begin() ?: return
         try {
             withTimeoutOrNull(4 * 60_000L) {
                 val devices = repository.devices.value.values.filter { it.lastConnectedAtMillis > 0L }.shuffled()
@@ -136,7 +246,5 @@ class BackgroundUploadWorker(context: Context, parameters: WorkerParameters) : C
         } finally {
             withContext(NonCancellable + Dispatchers.Main.immediate) { session.close() }
         }
-        // Unavailable/busy BMSes are tried again next period, without an aggressive retry loop.
-        Result.success()
     }
 }

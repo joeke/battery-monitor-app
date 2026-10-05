@@ -44,6 +44,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -89,6 +91,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jbd.bmsmonitor.model.BackgroundUploadInterval
 import com.jbd.bmsmonitor.model.BmsDeviceState
 import com.jbd.bmsmonitor.model.BmsSettings
 import com.jbd.bmsmonitor.model.BmsTelemetry
@@ -154,6 +157,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val scanning by viewModel.scanning.collectAsStateWithLifecycle()
     val backgroundDisconnectSeconds by viewModel.backgroundDisconnectSeconds.collectAsStateWithLifecycle()
     val backgroundUploadEnabled by viewModel.backgroundUploadEnabled.collectAsStateWithLifecycle()
+    val backgroundUploadInterval by viewModel.backgroundUploadInterval.collectAsStateWithLifecycle()
     val serverUploadConfig by viewModel.serverUploadConfig.collectAsStateWithLifecycle()
     val serverConnectionCheck by viewModel.serverConnectionCheck.collectAsStateWithLifecycle()
     val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
@@ -188,6 +192,8 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
             onBackgroundDisconnectSecondsChange = viewModel::setBackgroundDisconnectSeconds,
             backgroundUploadEnabled = backgroundUploadEnabled,
             onBackgroundUploadEnabledChange = viewModel::setBackgroundUploadEnabled,
+            backgroundUploadInterval = backgroundUploadInterval,
+            onBackgroundUploadIntervalChange = viewModel::setBackgroundUploadInterval,
             serverUploadConfig = serverUploadConfig,
             serverConnectionCheck = serverConnectionCheck,
             onServerUploadEnabledChange = viewModel::setServerUploadEnabled,
@@ -237,6 +243,8 @@ private fun AppSettingsScreen(
     onBackgroundDisconnectSecondsChange: (Int) -> Unit,
     backgroundUploadEnabled: Boolean,
     onBackgroundUploadEnabledChange: (Boolean) -> Unit,
+    backgroundUploadInterval: BackgroundUploadInterval,
+    onBackgroundUploadIntervalChange: (BackgroundUploadInterval) -> Unit,
     serverUploadConfig: ServerUploadConfig,
     serverConnectionCheck: MainViewModel.ServerConnectionCheckState,
     onServerUploadEnabledChange: (Boolean) -> Unit,
@@ -275,6 +283,8 @@ private fun AppSettingsScreen(
                 ServerUploadCard(
                     backgroundUploadEnabled = backgroundUploadEnabled,
                     onBackgroundUploadEnabledChange = onBackgroundUploadEnabledChange,
+                    backgroundUploadInterval = backgroundUploadInterval,
+                    onBackgroundUploadIntervalChange = onBackgroundUploadIntervalChange,
                     config = serverUploadConfig,
                     connectionCheck = serverConnectionCheck,
                     onEnabledChange = onServerUploadEnabledChange,
@@ -1122,6 +1132,8 @@ private fun AppUpdateCard(
 private fun ServerUploadCard(
     backgroundUploadEnabled: Boolean,
     onBackgroundUploadEnabledChange: (Boolean) -> Unit,
+    backgroundUploadInterval: BackgroundUploadInterval,
+    onBackgroundUploadIntervalChange: (BackgroundUploadInterval) -> Unit,
     config: ServerUploadConfig,
     connectionCheck: MainViewModel.ServerConnectionCheckState,
     onEnabledChange: (Boolean) -> Unit,
@@ -1130,6 +1142,7 @@ private fun ServerUploadCard(
 ) {
     var serverUrl by remember(config.serverUrl) { mutableStateOf(config.serverUrl) }
     var apiKey by remember(config.apiKey) { mutableStateOf(config.apiKey) }
+    var intervalMenuExpanded by remember { mutableStateOf(false) }
     val hasValidUrl = isValidHttpsUrl(serverUrl)
 
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -1153,26 +1166,6 @@ private fun ServerUploadCard(
             }
 
             if (config.enabled) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Background uploads", fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "About every 30 minutes on this Android device",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Switch(checked = backgroundUploadEnabled, onCheckedChange = onBackgroundUploadEnabledChange)
-                }
-                if (backgroundUploadEnabled) {
-                    Text(
-                        "With a saved server configuration, leaving the app disconnects immediately, " +
-                            "overriding Background disconnect. While in the background, it briefly reconnects " +
-                            "to each saved BMS, uploads a fresh reading, and disconnects. " +
-                            "Busy or unreachable BMSes are skipped. Android battery saving can delay uploads.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
                 OutlinedTextField(
                     value = serverUrl,
                     onValueChange = {
@@ -1232,6 +1225,57 @@ private fun ServerUploadCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Background uploads", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "About every ${backgroundUploadInterval.label} on this Android device",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(checked = backgroundUploadEnabled, onCheckedChange = onBackgroundUploadEnabledChange)
+                }
+                if (backgroundUploadEnabled) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Upload interval", modifier = Modifier.weight(1f))
+                        Box {
+                            OutlinedButton(onClick = { intervalMenuExpanded = true }) {
+                                Text("${backgroundUploadInterval.label} ▾")
+                            }
+                            DropdownMenu(
+                                expanded = intervalMenuExpanded,
+                                onDismissRequest = { intervalMenuExpanded = false },
+                            ) {
+                                BackgroundUploadInterval.entries.forEach { interval ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (interval == backgroundUploadInterval) "✓  ${interval.label}"
+                                                else interval.label,
+                                            )
+                                        },
+                                        onClick = {
+                                            onBackgroundUploadIntervalChange(interval)
+                                            intervalMenuExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Text(
+                        "After leaving the app, connections stay active until the Background disconnect " +
+                            "timeout expires. The upload interval starts after disconnection. " +
+                            "While in the background, it briefly reconnects " +
+                            "to each saved BMS, uploads a fresh reading, and disconnects. " +
+                            "Busy or unreachable BMSes are skipped. Android battery saving can delay uploads.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -1260,11 +1304,7 @@ private fun BackgroundDisconnectCard(seconds: Int, onSecondsChange: (Int) -> Uni
             Column(Modifier.weight(1f)) {
                 Text("Background disconnect", fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (seconds == MainViewModel.NEVER_DISCONNECT) {
-                        "Keep connections while Android keeps the app alive"
-                    } else {
-                        "Disconnect after the app is away for ${timeoutLabel(seconds)}"
-                    },
+                    "Disconnect after the app is away for ${timeoutLabel(seconds)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1492,13 +1532,10 @@ private fun formatTimestamp(timestamp: Long): String =
     DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(timestamp))
 
 private fun timeoutLabel(seconds: Int): String = when (seconds) {
-    MainViewModel.NEVER_DISCONNECT -> "Never"
     5 -> "5 seconds"
     10 -> "10 seconds"
     30 -> "30 seconds"
     60 -> "1 minute"
-    300 -> "5 minutes"
-    1_800 -> "30 minutes"
     else -> "$seconds seconds"
 }
 
