@@ -13,11 +13,10 @@ class BackgroundDisconnectTest {
         scheduleTimeout = { timeout, delay -> scheduled = timeout; scheduledDelay = delay },
         cancelTimeout = { scheduled = null },
         disconnectDevices = { events += "disconnect" },
-        onDisconnectedInBackground = { events += "start upload interval" },
     )
 
     @Test
-    fun `switching apps preserves connections until timeout and then starts upload interval`() {
+    fun `switching apps preserves connections until timeout and then disconnects once`() {
         countdown.backgrounded(60)
         assertEquals(60_000L, scheduledDelay)
         assertTrue(events.isEmpty())
@@ -26,10 +25,10 @@ class BackgroundDisconnectTest {
         assertTrue(events.isEmpty())
         now = 60_000L
         scheduled!!.run()
-        assertEquals(listOf("disconnect", "start upload interval"), events)
+        assertEquals(listOf("disconnect"), events)
         assertNull(scheduled)
         countdown.disconnectIfDue()
-        assertEquals(2, events.size)
+        assertEquals(1, events.size)
     }
 
     @Test
@@ -55,7 +54,7 @@ class BackgroundDisconnectTest {
         assertTrue(events.isEmpty())
         now = 15_000L
         countdown.disconnectIfDue()
-        assertEquals(listOf("disconnect", "start upload interval"), events)
+        assertEquals(listOf("disconnect"), events)
     }
 
     @Test
@@ -69,12 +68,27 @@ class BackgroundDisconnectTest {
     }
 
     @Test
-    fun `background worker can finish a missed timeout before starting the upload interval`() {
+    fun `background worker finishes a suspended timeout and a late handler does nothing`() {
         countdown.backgrounded(10)
+        val timeout = scheduled!!
         now = 90_000L
         countdown.disconnectIfDue()
-        assertEquals(listOf("disconnect", "start upload interval"), events)
+        assertEquals(listOf("disconnect"), events)
         assertNull(scheduled)
+        timeout.run()
+        assertEquals(listOf("disconnect"), events)
+    }
+
+    @Test
+    fun `handler waking after screen off disconnects immediately and only once`() {
+        countdown.backgrounded(10)
+        val timeout = scheduled!!
+        now = 90_000L
+        timeout.run()
+        assertEquals(listOf("disconnect"), events)
+        assertNull(scheduled)
+        countdown.disconnectIfDue()
+        assertEquals(listOf("disconnect"), events)
     }
 
     @Test

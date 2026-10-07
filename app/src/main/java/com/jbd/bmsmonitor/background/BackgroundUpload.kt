@@ -25,6 +25,7 @@ import com.jbd.bmsmonitor.model.ConnectionStatus
 import com.jbd.bmsmonitor.model.DiscoveredBms
 import com.jbd.bmsmonitor.model.ServerUploadConfig
 import com.jbd.bmsmonitor.network.BatteryDataUploader
+import com.jbd.bmsmonitor.storage.UploadLogStore
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
@@ -40,6 +41,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 /** One repository for both the UI and workers, so connections and saved snapshots cannot compete. */
 class BatteryMonitorApplication : Application() {
     val repository by lazy { JbdBleRepository(this) }
+    val uploadLogs by lazy { UploadLogStore.open(this) }
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     val backgroundDisconnect by lazy {
         BackgroundDisconnect(
@@ -47,7 +49,6 @@ class BatteryMonitorApplication : Application() {
             scheduleTimeout = { timeout, delay -> mainHandler.postDelayed(timeout, delay); Unit },
             cancelTimeout = { mainHandler.removeCallbacks(it) },
             disconnectDevices = repository::disconnectAll,
-            onDisconnectedInBackground = { BackgroundUpload.afterDisconnect(this) },
         )
     }
     val backgroundConnections by lazy {
@@ -103,12 +104,6 @@ object BackgroundUpload {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
             .putLong(DISCONNECT_AT, System.currentTimeMillis() + disconnectSeconds * 1_000L).apply()
         // Persist the whole delay now, so Android can resume uploads even if the process dies during the countdown.
-        schedule(context, restart = true)
-    }
-
-    fun afterDisconnect(context: Context) {
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
-            .putLong(DISCONNECT_AT, System.currentTimeMillis()).apply()
         schedule(context, restart = true)
     }
 
@@ -180,17 +175,22 @@ class BackgroundUploadWorker(context: Context, parameters: WorkerParameters) : C
     override suspend fun doWork(): Result = withContext(Dispatchers.Main.immediate) {
         val app = applicationContext as BatteryMonitorApplication
         val generation = inputData.getString(BackgroundUpload.GENERATION) ?: return@withContext Result.success()
-        // A suspended process may have missed its Handler timeout. Finish that disconnect first.
+        // A suspended process may have missed its Handler timeout. Finish that disconnect first,
+        // without replacing this worker: beginBackground already scheduled the full initial delay.
         if (!app.backgroundConnections.foreground) app.backgroundDisconnect.disconnectIfDue()
         if (!BackgroundUpload.isCurrent(app, generation)) return@withContext Result.success()
+        app.uploadLogs.append("Background upload cycle started.")
         try {
             uploadOnce(app)
             coroutineContext.ensureActive()
             if (!isStopped) BackgroundUpload.scheduleNext(app, generation)?.await()
+            app.uploadLogs.append("Background upload cycle finished.")
             Result.success()
         } catch (cancelled: CancellationException) {
+            app.uploadLogs.append("Background upload cycle cancelled.")
             throw cancelled
         } catch (_: Exception) {
+            app.uploadLogs.append("Background upload cycle failed; a retry is scheduled.")
             // Keep the schedule alive after a transient failure; WorkManager applies retry backoff.
             Result.retry()
         }
@@ -200,14 +200,24 @@ class BackgroundUploadWorker(context: Context, parameters: WorkerParameters) : C
         if (!BackgroundUpload.enabled(app) || app.backgroundConnections.foreground) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             app.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-        ) return
+        ) {
+            app.uploadLogs.append("Background upload skipped: Bluetooth permission is missing.")
+            return
+        }
         val repository = app.repository
-        if (!runCatching { repository.bluetoothEnabled }.getOrDefault(false)) return
-        val session = app.backgroundConnections.begin() ?: return
+        if (!runCatching { repository.bluetoothEnabled }.getOrDefault(false)) {
+            app.uploadLogs.append("Background upload skipped: Bluetooth is off or unavailable.")
+            return
+        }
+        val session = app.backgroundConnections.begin() ?: run {
+            app.uploadLogs.append("Background upload skipped: another Bluetooth session is active.")
+            return
+        }
         try {
-            withTimeoutOrNull(4 * 60_000L) {
+            val completed = withTimeoutOrNull(4 * 60_000L) {
                 val devices = repository.devices.value.values.filter { it.lastConnectedAtMillis > 0L }.shuffled()
-                val uploader = BatteryDataUploader(app)
+                if (devices.isEmpty()) app.uploadLogs.append("Background upload skipped: no previously connected batteries.")
+                val uploader = BatteryDataUploader(app, app.uploadLogs)
                 for (device in devices) {
                     if (session.closed || !BackgroundUpload.enabled(app)) break
                     try {
@@ -226,23 +236,32 @@ class BackgroundUploadWorker(context: Context, parameters: WorkerParameters) : C
                         if (session.closed || !BackgroundUpload.enabled(app)) break
                         if (reading != null) {
                             val config = BackgroundUpload.config(app)
-                            val uploaded = withContext(Dispatchers.IO) { uploader.upload(config, reading) }
+                            val uploaded = withContext(Dispatchers.IO) { uploader.upload(config, reading, background = true) }
                             if (uploaded) {
                                 app.getSharedPreferences(BackgroundUpload.PREFERENCES, Context.MODE_PRIVATE).edit()
                                     .putLong(BackgroundUpload.LAST_UPLOAD_PREFIX + device.address, System.currentTimeMillis())
                                     .apply()
                             }
+                        } else {
+                            app.uploadLogs.append(
+                                "Background upload skipped for ${device.name.ifBlank { device.address }}: " +
+                                    "could not obtain a complete reading; the battery may be busy, unreachable, or timed out.",
+                            )
                         }
                     } catch (_: SecurityException) {
+                        app.uploadLogs.append("Background upload stopped: Bluetooth access was denied.")
                         // Permission or Bluetooth access can be revoked while work is running.
                         break
                     } catch (_: IllegalArgumentException) {
+                        app.uploadLogs.append("Background upload skipped for ${device.name}: invalid Bluetooth address.")
                         // Ignore an invalid saved BLE address and continue with the remaining devices.
                     } finally {
                         session.disconnect()
                     }
                 }
+                true
             }
+            if (completed == null) app.uploadLogs.append("Background upload stopped: the cycle reached its four-minute limit.")
         } finally {
             withContext(NonCancellable + Dispatchers.Main.immediate) { session.close() }
         }

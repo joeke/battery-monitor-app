@@ -32,7 +32,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = app.repository
     private val preferences = application.getSharedPreferences(APP_PREFERENCES, Application.MODE_PRIVATE)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val batteryDataUploader = BatteryDataUploader(application)
+    private val batteryDataUploader = BatteryDataUploader(application, app.uploadLogs)
     private val appUpdateManager = AppUpdateManager(application)
     private var appIsForegrounded = false
     private var uploadJob: Job? = null
@@ -91,6 +91,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _appUpdateState = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
     val appUpdateState = _appUpdateState.asStateFlow()
+    val uploadLogs = app.uploadLogs.entries
+
+    fun clearUploadLogs() = app.uploadLogs.clear()
 
     val discovered = repository.discovered
     val devices = repository.devices
@@ -202,6 +205,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repository.stopScan()
         val seconds = _backgroundDisconnectSeconds.value
         BackgroundUpload.beginBackground(app, seconds)
+        if (BackgroundUpload.enabled(app)) {
+            app.uploadLogs.append(
+                "Background upload scheduled after the ${seconds}-second disconnect timeout " +
+                    "and ${_backgroundUploadInterval.value.label} upload interval; Android may delay it.",
+            )
+        }
         app.backgroundDisconnect.backgrounded(seconds)
     }
 

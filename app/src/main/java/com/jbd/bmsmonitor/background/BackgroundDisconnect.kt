@@ -1,12 +1,14 @@
 package com.jbd.bmsmonitor.background
 
-/** Application-owned countdown so closing the activity does not cancel disconnection. Main thread only. */
+/**
+ * Application-owned BLE countdown. Main thread only.
+ * Upload work is scheduled separately when leaving the app; a late timeout must not restart it.
+ */
 class BackgroundDisconnect(
     private val elapsedRealtime: () -> Long,
     private val scheduleTimeout: (Runnable, Long) -> Unit,
     private val cancelTimeout: (Runnable) -> Unit,
     private val disconnectDevices: () -> Unit,
-    private val onDisconnectedInBackground: () -> Unit,
 ) {
     private var deadline: Long? = null
     private val timeout = Runnable { disconnectIfDue() }
@@ -31,7 +33,6 @@ class BackgroundDisconnect(
         deadline = null
         cancelTimeout(timeout)
         disconnectDevices()
-        onDisconnectedInBackground()
     }
 
     companion object {

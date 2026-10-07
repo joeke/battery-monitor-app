@@ -16,8 +16,8 @@ android {
         applicationId = "com.jbd.bmsmonitor"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.5.9"
+        versionCode = 19
+        versionName = "0.5.10"
 
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"$escapedUpdateManifestUrl\"")
 

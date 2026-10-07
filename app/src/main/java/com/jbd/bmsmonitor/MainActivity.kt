@@ -101,6 +101,8 @@ import com.jbd.bmsmonitor.model.ServerUploadConfig
 import com.jbd.bmsmonitor.model.SettingsNote
 import com.jbd.bmsmonitor.model.settingsAdvice
 import com.jbd.bmsmonitor.network.ServerConnectionCheckResult
+import com.jbd.bmsmonitor.storage.UploadLogEntry
+import com.jbd.bmsmonitor.storage.UploadLogStore
 import java.net.URI
 import java.text.DateFormat
 import java.util.Date
@@ -161,31 +163,42 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val serverUploadConfig by viewModel.serverUploadConfig.collectAsStateWithLifecycle()
     val serverConnectionCheck by viewModel.serverConnectionCheck.collectAsStateWithLifecycle()
     val appUpdateState by viewModel.appUpdateState.collectAsStateWithLifecycle()
+    val uploadLogs by viewModel.uploadLogs.collectAsStateWithLifecycle()
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     var showAppSettings by remember { mutableStateOf(false) }
+    var showUploadLogs by remember { mutableStateOf(false) }
     val selected = selectedAddress?.let(devices::get)
 
-    BackHandler(enabled = showAppSettings) { showAppSettings = false }
-    BackHandler(enabled = selected != null && !showAppSettings) { selectedAddress = null }
+    BackHandler(enabled = showAppSettings && !showUploadLogs) { showAppSettings = false }
+    BackHandler(enabled = selected != null && !showAppSettings && !showUploadLogs) { selectedAddress = null }
+    BackHandler(enabled = showUploadLogs) { showUploadLogs = false }
 
     when {
-        !viewModel.bluetoothAvailable -> BlockingMessage(
+        showUploadLogs -> UploadLogsScreen(
+            entries = uploadLogs,
+            onClear = viewModel::clearUploadLogs,
+            onBack = { showUploadLogs = false },
+        )
+        !showAppSettings && !viewModel.bluetoothAvailable -> BlockingMessage(
             title = "Bluetooth LE is not available",
             body = "Battery Monitor needs a phone or tablet with Bluetooth Low Energy support.",
+            onOpenSettings = { showAppSettings = true },
         )
-        !permissionsGranted -> BlockingMessage(
+        !showAppSettings && !permissionsGranted -> BlockingMessage(
             title = "Nearby devices permission",
             body = "Allow Bluetooth access to find and connect to your BMS. Scan results are not used for location.",
             action = "Allow access",
             onAction = { permissionLauncher.launch(requiredPermissions) },
+            onOpenSettings = { showAppSettings = true },
         )
-        !viewModel.bluetoothEnabled -> BlockingMessage(
+        !showAppSettings && !viewModel.bluetoothEnabled -> BlockingMessage(
             title = "Turn on Bluetooth",
             body = "Bluetooth must be enabled before the app can find your BMS devices.",
             action = "Turn on",
             onAction = {
                 enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             },
+            onOpenSettings = { showAppSettings = true },
         )
         showAppSettings -> AppSettingsScreen(
             backgroundDisconnectSeconds = backgroundDisconnectSeconds,
@@ -214,6 +227,7 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
                     )
                 }
             },
+            onOpenLogs = { showUploadLogs = true },
             onBack = { showAppSettings = false },
         )
         selected != null -> DeviceDetailScreen(
@@ -254,6 +268,7 @@ private fun AppSettingsScreen(
     onCheckForUpdate: () -> Unit,
     onDownloadUpdate: () -> Unit,
     onInstallUpdate: () -> Unit,
+    onOpenLogs: () -> Unit,
     onBack: () -> Unit,
 ) {
     LaunchedEffect(Unit) { onCheckForUpdate() }
@@ -300,6 +315,89 @@ private fun AppSettingsScreen(
                     onDownload = onDownloadUpdate,
                     onInstall = onInstallUpdate,
                 )
+            }
+            item {
+                Card(onClick = onOpenLogs, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Logs", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "View upload attempts, results, and background activity",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UploadLogsScreen(
+    entries: List<UploadLogEntry>,
+    onClear: () -> Unit,
+    onBack: () -> Unit,
+) {
+    var confirmClear by remember { mutableStateOf(false) }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear upload logs?") },
+            text = { Text("This removes the upload history saved on this phone.") },
+            confirmButton = {
+                TextButton(onClick = { onClear(); confirmClear = false }) { Text("Clear logs") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+        )
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = { BackButton(onBack) },
+                title = { Text("Logs", fontWeight = FontWeight.SemiBold) },
+                actions = {
+                    TextButton(onClick = { confirmClear = true }, enabled = entries.isNotEmpty()) {
+                        Text("Clear")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                Text(
+                    "Latest ${UploadLogStore.MAX_ENTRIES} entries, newest first. Times use this phone’s local time. " +
+                        "Sent means the server returned a successful response.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (entries.isEmpty()) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("No upload logs yet", fontWeight = FontWeight.SemiBold)
+                            Text("Upload attempts and background activity will appear here.")
+                        }
+                    }
+                }
+            }
+            items(entries, key = { it.id }) { entry ->
+                Text("${entry.timestamp()} - ${entry.message}", style = MaterialTheme.typography.bodySmall)
+                HorizontalDivider(Modifier.padding(top = 12.dp))
             }
         }
     }
@@ -1388,12 +1486,14 @@ private fun BlockingMessage(
     body: String,
     action: String? = null,
     onAction: (() -> Unit)? = null,
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (action != null && onAction != null) Button(onClick = onAction) { Text(action) }
+            if (onOpenSettings != null) TextButton(onClick = onOpenSettings) { Text("Settings") }
         }
     }
 }

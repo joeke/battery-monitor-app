@@ -5,6 +5,7 @@ import android.os.Build
 import android.provider.Settings
 import com.jbd.bmsmonitor.model.BmsDeviceState
 import com.jbd.bmsmonitor.model.ServerUploadConfig
+import com.jbd.bmsmonitor.storage.UploadLogStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -21,7 +22,7 @@ sealed interface ServerConnectionCheckResult {
     data class UnexpectedResponse(val statusCode: Int) : ServerConnectionCheckResult
 }
 
-class BatteryDataUploader(context: Context) {
+class BatteryDataUploader(context: Context, private val uploadLogs: UploadLogStore) {
     private val senderId = Settings.Secure.getString(
         context.contentResolver,
         Settings.Secure.ANDROID_ID,
@@ -32,31 +33,49 @@ class BatteryDataUploader(context: Context) {
         .trim()
         .take(255)
 
-    fun upload(config: ServerUploadConfig, device: BmsDeviceState): Boolean {
-        val endpoint = runCatching { URI(config.serverUrl).toURL() }.getOrNull() ?: return false
-        if (endpoint.protocol != "https") return false
+    fun upload(config: ServerUploadConfig, device: BmsDeviceState, background: Boolean = false): Boolean {
+        val source = if (background) "Background" else "Foreground"
+        val battery = device.name.ifBlank { device.address }
+        fun log(message: String) = uploadLogs.append("$source: $message")
+        log("Sending battery data for $battery to server.")
+        val endpoint = runCatching { URI(config.serverUrl).toURL() }.getOrNull()
+        if (endpoint == null || endpoint.protocol != "https") {
+            log("Failed to send battery data for $battery: invalid HTTPS server URL.")
+            return false
+        }
 
-        val connection = (endpoint.openConnection() as? HttpURLConnection) ?: return false
+        var connection: HttpURLConnection? = null
         return try {
-            connection.requestMethod = "POST"
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
-            connection.doOutput = true
-            connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            connection.setRequestProperty("X-Api-Key", config.apiKey)
+            val request = endpoint.openConnection() as HttpURLConnection
+            connection = request
+            request.requestMethod = "POST"
+            request.connectTimeout = CONNECT_TIMEOUT_MS
+            request.readTimeout = READ_TIMEOUT_MS
+            request.doOutput = true
+            request.setRequestProperty("Accept", "application/json")
+            request.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            request.setRequestProperty("X-Api-Key", config.apiKey)
 
-            connection.outputStream.use { output ->
+            request.outputStream.use { output ->
                 output.write(requestBody(device).toString().toByteArray(Charsets.UTF_8))
             }
 
-            val succeeded = connection.responseCode in 200..299
-            (if (succeeded) connection.inputStream else connection.errorStream)?.use { it.readBytes() }
+            val statusCode = request.responseCode
+            val succeeded = statusCode in 200..299
+            if (succeeded) {
+                log("Sent battery data for $battery to server (HTTP $statusCode).")
+            } else {
+                log("Failed to send battery data for $battery: server returned HTTP $statusCode.")
+            }
+            // Receipt is established by the HTTP status; a response-body read failure cannot undo it.
+            runCatching { (if (succeeded) request.inputStream else request.errorStream)?.use { it.readBytes() } }
             succeeded
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            // Do not include exception messages, URLs, request bodies, or API keys in the log.
+            log("Failed to send battery data for $battery: network/request error (${error.javaClass.simpleName}).")
             false
         } finally {
-            connection.disconnect()
+            connection?.disconnect()
         }
     }
 
