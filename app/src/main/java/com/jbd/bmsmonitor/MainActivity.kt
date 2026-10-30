@@ -3,8 +3,10 @@ package com.jbd.bmsmonitor
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -90,6 +92,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.location.LocationManagerCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jbd.bmsmonitor.background.BackgroundUpload
@@ -148,6 +152,13 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val enableBluetoothLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { permissionRevision++ }
+    var locationRevision by remember { mutableIntStateOf(0) }
+    // Location can be toggled from quick settings or system settings while the app is in the background.
+    LifecycleResumeEffect(Unit) {
+        locationRevision++
+        onPauseOrDispose { }
+    }
+    val scanNeedsLocation = remember(locationRevision) { scanNeedsLocation(context) }
     var batteryRevision by remember { mutableIntStateOf(0) }
     val batteryOptimized = remember(batteryRevision) { BackgroundUpload.batteryOptimized(context) }
     val batteryOptimizationLauncher = rememberLauncherForActivityResult(
@@ -265,7 +276,14 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
             devices = devices.values.toList(),
             discovered = discovered,
             scanning = scanning,
-            onScan = { if (scanning) viewModel.stopScan() else viewModel.startScan() },
+            scanNeedsLocation = scanNeedsLocation,
+            onOpenLocationSettings = {
+                runCatching { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            },
+            onScan = {
+                locationRevision++
+                if (scanning) viewModel.stopScan() else viewModel.startScan()
+            },
             onConnect = viewModel::connect,
             onSelect = { selectedAddress = it },
             onDisconnect = viewModel::disconnect,
@@ -438,6 +456,8 @@ private fun DeviceListScreen(
     devices: List<BmsDeviceState>,
     discovered: List<DiscoveredBms>,
     scanning: Boolean,
+    scanNeedsLocation: Boolean,
+    onOpenLocationSettings: () -> Unit,
     onScan: () -> Unit,
     onConnect: (DiscoveredBms) -> Unit,
     onSelect: (String) -> Unit,
@@ -499,7 +519,17 @@ private fun DeviceListScreen(
                     }
                 }
             }
-            if (!scanning && discovered.isEmpty()) {
+            if (scanNeedsLocation) {
+                item {
+                    EmptyCard(
+                        "Turn on Location",
+                        "Android 11 and older only show nearby Bluetooth devices while Location is on. " +
+                            "The app does not use or store your location.",
+                        "Open Location settings",
+                        onOpenLocationSettings,
+                    )
+                }
+            } else if (!scanning && discovered.isEmpty()) {
                 item {
                     EmptyCard(
                         "No BMS devices found yet",
@@ -1678,7 +1708,13 @@ private fun JbdTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Compo
     }
 }
 
-private fun bluetoothPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+/** Android 11 and older deliver no BLE scan results while system Location is off, even with permission. */
+private fun scanNeedsLocation(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+        context.getSystemService(LocationManager::class.java)
+            ?.let { !LocationManagerCompat.isLocationEnabled(it) } == true
+
+private fun bluetoothPermissions(): Array<String> =if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
     arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
 } else {
     arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)

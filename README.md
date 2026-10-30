@@ -28,7 +28,7 @@ Open the project in Android Studio (JDK 17) and run the `app` configuration on a
 ./gradlew test assembleDebug
 ```
 
-On Android 12+, grant the Nearby devices permission. On Android 8–11, Android requires location permission for BLE scanning. The app does not derive or store location.
+On Android 12+, grant the Nearby devices permission. On Android 8–11, Android requires location permission for BLE scanning, and scans return no devices while system Location is off; the device list then shows a **Turn on Location** card with a shortcut to the Location settings. Reconnecting to saved BMSes works without Location. The app does not derive or store location.
 
 ## Background uploads
 
