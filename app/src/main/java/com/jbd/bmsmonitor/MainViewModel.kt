@@ -210,6 +210,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 "Background upload scheduled after the ${seconds}-second disconnect timeout " +
                     "and ${_backgroundUploadInterval.value.label} upload interval; Android may delay it.",
             )
+            if (BackgroundUpload.batteryOptimized(app)) {
+                app.uploadLogs.append(
+                    "Warning: battery optimization is on for this app; with power saving on, " +
+                        "Android blocks background uploads until the app is opened again.",
+                )
+            }
         }
         app.backgroundDisconnect.backgrounded(seconds)
     }
@@ -219,7 +225,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appIsForegrounded = true
         BackgroundUpload.endBackground(app)
         app.backgroundDisconnect.foregrounded()
+        connectSavedDevices()
         requestUploadCheck()
+    }
+
+    /** One attempt per opening; a failed connection stays disconnected until the user reconnects. */
+    private fun connectSavedDevices() {
+        if (!repository.bluetoothEnabled) return
+        repository.devices.value.values
+            .filter { it.lastConnectedAtMillis > 0L && it.connectionStatus == ConnectionStatus.DISCONNECTED }
+            .forEach { repository.reconnect(it.address) }
     }
 
     private val uploadCheck = object : Runnable {

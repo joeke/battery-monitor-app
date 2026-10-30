@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -99,6 +100,10 @@ object BackgroundUpload {
     fun enabled(context: Context): Boolean =
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getBoolean(ENABLED, false) &&
             config(context).isConfigured
+
+    /** Battery saver blocks jobs of optimized apps once they leave the foreground, so uploads never run. */
+    fun batteryOptimized(context: Context): Boolean =
+        context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == false
 
     fun beginBackground(context: Context, disconnectSeconds: Int) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()

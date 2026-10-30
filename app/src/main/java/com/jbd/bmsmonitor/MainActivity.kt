@@ -2,6 +2,7 @@ package com.jbd.bmsmonitor
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -91,6 +92,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jbd.bmsmonitor.background.BackgroundUpload
 import com.jbd.bmsmonitor.model.BackgroundUploadInterval
 import com.jbd.bmsmonitor.model.BmsDeviceState
 import com.jbd.bmsmonitor.model.BmsSettings
@@ -146,6 +148,24 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
     val enableBluetoothLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { permissionRevision++ }
+    var batteryRevision by remember { mutableIntStateOf(0) }
+    val batteryOptimized = remember(batteryRevision) { BackgroundUpload.batteryOptimized(context) }
+    val batteryOptimizationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { batteryRevision++ }
+    val requestUnrestrictedBattery = {
+        try {
+            batteryOptimizationLauncher.launch(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:${context.packageName}"),
+                ),
+            )
+        } catch (_: ActivityNotFoundException) {
+            // Some vendors remove the direct prompt; fall back to the full exemption list.
+            batteryOptimizationLauncher.launch(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+    }
     val updateInstallPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
@@ -204,9 +224,14 @@ private fun JbdApp(viewModel: MainViewModel = viewModel()) {
             backgroundDisconnectSeconds = backgroundDisconnectSeconds,
             onBackgroundDisconnectSecondsChange = viewModel::setBackgroundDisconnectSeconds,
             backgroundUploadEnabled = backgroundUploadEnabled,
-            onBackgroundUploadEnabledChange = viewModel::setBackgroundUploadEnabled,
+            onBackgroundUploadEnabledChange = {
+                viewModel.setBackgroundUploadEnabled(it)
+                if (it && batteryOptimized) requestUnrestrictedBattery()
+            },
             backgroundUploadInterval = backgroundUploadInterval,
             onBackgroundUploadIntervalChange = viewModel::setBackgroundUploadInterval,
+            batteryOptimized = batteryOptimized,
+            onRequestUnrestrictedBattery = requestUnrestrictedBattery,
             serverUploadConfig = serverUploadConfig,
             serverConnectionCheck = serverConnectionCheck,
             onServerUploadEnabledChange = viewModel::setServerUploadEnabled,
@@ -259,6 +284,8 @@ private fun AppSettingsScreen(
     onBackgroundUploadEnabledChange: (Boolean) -> Unit,
     backgroundUploadInterval: BackgroundUploadInterval,
     onBackgroundUploadIntervalChange: (BackgroundUploadInterval) -> Unit,
+    batteryOptimized: Boolean,
+    onRequestUnrestrictedBattery: () -> Unit,
     serverUploadConfig: ServerUploadConfig,
     serverConnectionCheck: MainViewModel.ServerConnectionCheckState,
     onServerUploadEnabledChange: (Boolean) -> Unit,
@@ -300,6 +327,8 @@ private fun AppSettingsScreen(
                     onBackgroundUploadEnabledChange = onBackgroundUploadEnabledChange,
                     backgroundUploadInterval = backgroundUploadInterval,
                     onBackgroundUploadIntervalChange = onBackgroundUploadIntervalChange,
+                    batteryOptimized = batteryOptimized,
+                    onRequestUnrestrictedBattery = onRequestUnrestrictedBattery,
                     config = serverUploadConfig,
                     connectionCheck = serverConnectionCheck,
                     onEnabledChange = onServerUploadEnabledChange,
@@ -671,6 +700,39 @@ private fun DeviceDetailScreen(
                         onDisconnect = disconnect,
                     )
                 }
+                // Keep the saved snapshot visible but dimmed until the first fresh reading arrives.
+                when {
+                    device.connectionStatus == ConnectionStatus.CONNECTING ||
+                        device.connectionStatus == ConnectionStatus.DISCOVERING ->
+                        LoadingOverlay(statusLabel(device.connectionStatus))
+                    device.connectionStatus == ConnectionStatus.CONNECTED &&
+                        device.telemetry.updatedAtMillis < device.lastConnectedAtMillis ->
+                        LoadingOverlay("Reading battery data…")
+                }
+            }
+        }
+    }
+}
+
+/** Does not consume touches, so scrolling and Disconnect keep working while connecting. */
+@Composable
+private fun LoadingOverlay(label: String) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 4.dp,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(label, style = MaterialTheme.typography.bodyMedium)
             }
         }
     }
@@ -1232,6 +1294,8 @@ private fun ServerUploadCard(
     onBackgroundUploadEnabledChange: (Boolean) -> Unit,
     backgroundUploadInterval: BackgroundUploadInterval,
     onBackgroundUploadIntervalChange: (BackgroundUploadInterval) -> Unit,
+    batteryOptimized: Boolean,
+    onRequestUnrestrictedBattery: () -> Unit,
     config: ServerUploadConfig,
     connectionCheck: MainViewModel.ServerConnectionCheckState,
     onEnabledChange: (Boolean) -> Unit,
@@ -1332,6 +1396,17 @@ private fun ServerUploadCard(
                         )
                     }
                     Switch(checked = backgroundUploadEnabled, onCheckedChange = onBackgroundUploadEnabledChange)
+                }
+                if (backgroundUploadEnabled && batteryOptimized) {
+                    Text(
+                        "Battery optimization is on for this app. With power saving on, Android blocks " +
+                            "background uploads until the app is opened again.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    OutlinedButton(onClick = onRequestUnrestrictedBattery, modifier = Modifier.fillMaxWidth()) {
+                        Text("Allow background activity")
+                    }
                 }
                 if (backgroundUploadEnabled) {
                     Row(

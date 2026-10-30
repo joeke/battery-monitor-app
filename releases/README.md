@@ -8,6 +8,7 @@ The GitHub Actions release workflow uploads the highest versioned APK in this di
 
 | APK | Version | SHA-256 |
 | --- | --- | --- |
+| `Battery-Monitor-0.5.11.apk` | 0.5.11 (20) | `cd31f5e35581f1958e5773126b3f69d8c2752bf18e3a684046db826e13cf7139` |
 | `Battery-Monitor-0.5.10.apk` | 0.5.10 (19) | `e59a56b1ef980d3b5bfbfb41804be1257c29b8d33d7b5de6e713e30356f0d794` |
 | `Battery-Monitor-0.5.9.apk` | 0.5.9 (18) | `6bade52d3cc8e2aa9e62c2c3e8ea49e3f16e0cbeb677e514e01b8f94f6b97ed7` |
 | `Battery-Monitor-0.5.8.apk` | 0.5.8 (17) | `6b1f9cb5b96ebf2fecb60fccb93f3d357f8a46eb44d3e1748aa50151e1da76c2` |

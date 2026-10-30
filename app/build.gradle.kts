@@ -16,8 +16,8 @@ android {
         applicationId = "com.jbd.bmsmonitor"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.5.10"
+        versionCode = 20
+        versionName = "0.5.11"
 
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"$escapedUpdateManifestUrl\"")
 
@@ -34,6 +34,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Same key as release so debug builds can be installed over a release install
+            // via adb without uninstalling (which would wipe saved BMSes and settings).
+            signingConfig = signingConfigs.getByName("testRelease")
+        }
         release {
             isMinifyEnabled = false
             // This project distributes test APKs directly, not through an app store.
